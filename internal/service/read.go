@@ -188,7 +188,7 @@ func versionErr(err error) error {
 
 func summary(id string, c store.CheckpointRow) wire.CheckpointSummary {
 	return wire.CheckpointSummary{
-		SessionID: id, Seq: c.Seq, Label: c.Label, CreatedAt: wire.Time(c.CreatedAt),
+		SessionID: id, Seq: c.Seq, Label: c.Label, CreatedAt: wire.Time(c.CreatedAt), Named: c.Named,
 		FilesChanged: c.FilesChanged, Additions: c.Additions, Deletions: c.Deletions,
 	}
 }

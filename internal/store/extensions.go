@@ -54,6 +54,7 @@ func (q *Queries) CheckExtension(ctx context.Context, sessionID string, tokenHas
 }
 
 type CheckpointEventRow struct {
+	MarkName     string
 	Seq          int
 	CreatedAt    time.Time
 	FilesChanged int
@@ -63,7 +64,8 @@ type CheckpointEventRow struct {
 
 func (q *Queries) CheckpointEvents(ctx context.Context, sessionID string, after, limit int) ([]CheckpointEventRow, error) {
 	rows, err := q.db.Query(ctx, `
-		SELECT seq, created_at, files_changed, additions, deletions
+		SELECT seq, created_at, files_changed, additions, deletions,
+		       CASE WHEN marker_key IS NULL THEN '' ELSE label END
 		FROM checkpoints WHERE session_id = $1 AND seq > $2
 		ORDER BY seq LIMIT $3`, sessionID, after, limit)
 	if err != nil {
@@ -73,7 +75,7 @@ func (q *Queries) CheckpointEvents(ctx context.Context, sessionID string, after,
 	events := []CheckpointEventRow{}
 	for rows.Next() {
 		var event CheckpointEventRow
-		if err := rows.Scan(&event.Seq, &event.CreatedAt, &event.FilesChanged, &event.Additions, &event.Deletions); err != nil {
+		if err := rows.Scan(&event.Seq, &event.CreatedAt, &event.FilesChanged, &event.Additions, &event.Deletions, &event.MarkName); err != nil {
 			return nil, err
 		}
 		events = append(events, event)

@@ -10,6 +10,7 @@ import (
 
 // CheckpointRow is one checkpoint without its changes.
 type CheckpointRow struct {
+	Named        bool
 	Seq          int
 	Label        string
 	Additions    int
@@ -76,7 +77,7 @@ func (q *Queries) InsertCheckpoint(ctx context.Context, sessionID string, c Chec
 // those before a sequence number.
 func (q *Queries) Checkpoints(ctx context.Context, sessionID string, limit int, before *int) ([]CheckpointRow, error) {
 	rows, err := q.db.Query(ctx, `
-		SELECT seq, label, additions, deletions, files_changed, created_at
+		SELECT seq, label, additions, deletions, files_changed, created_at, marker_key IS NOT NULL
 		FROM checkpoints
 		WHERE session_id = $1 AND ($2::int IS NULL OR seq < $2)
 		ORDER BY seq DESC
@@ -88,7 +89,7 @@ func (q *Queries) Checkpoints(ctx context.Context, sessionID string, limit int, 
 	out := []CheckpointRow{}
 	for rows.Next() {
 		var c CheckpointRow
-		if err := rows.Scan(&c.Seq, &c.Label, &c.Additions, &c.Deletions, &c.FilesChanged, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.Seq, &c.Label, &c.Additions, &c.Deletions, &c.FilesChanged, &c.CreatedAt, &c.Named); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -100,9 +101,9 @@ func (q *Queries) Checkpoints(ctx context.Context, sessionID string, limit int, 
 func (q *Queries) Checkpoint(ctx context.Context, sessionID string, seq int) (CheckpointRow, []wire.CheckpointChange, error) {
 	c := CheckpointRow{Seq: seq}
 	err := q.db.QueryRow(ctx, `
-		SELECT label, additions, deletions, files_changed, created_at
+		SELECT label, additions, deletions, files_changed, created_at, marker_key IS NOT NULL
 		FROM checkpoints WHERE session_id = $1 AND seq = $2`, sessionID, seq).
-		Scan(&c.Label, &c.Additions, &c.Deletions, &c.FilesChanged, &c.CreatedAt)
+		Scan(&c.Label, &c.Additions, &c.Deletions, &c.FilesChanged, &c.CreatedAt, &c.Named)
 	if err != nil {
 		return c, nil, notFound(err)
 	}
