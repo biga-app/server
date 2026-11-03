@@ -325,6 +325,29 @@ func TestRejoinSnapshotRecordsDeletions(t *testing.T) {
 	}
 }
 
+func TestStateAfterDeletingLastFile(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	id := newSessionID(t)
+	token := h.create(id)
+	base := "/api/sessions/" + id
+	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("a.txt", "hello"))}, 202, "")
+	h.expect(req{method: "POST", path: base + "/checkpoint", token: token, body: checkpoint(id, entry("a.txt", "deleted", ""))}, 202, "")
+
+	var state wire.SessionState
+	h.expect(req{method: "GET", path: base + "/state"}, 200, "").data(t, &state)
+	var tree wire.FileNode
+	if state.Snapshot == nil {
+		t.Fatal("state has no snapshot")
+	}
+	if err := json.Unmarshal(state.Snapshot.Tree, &tree); err != nil {
+		t.Fatal(err)
+	}
+	if tree.Type != wire.NodeDirectory || len(tree.Children) != 0 || len(state.Contents) != 0 {
+		t.Fatalf("expected an empty tree and no contents, got tree %s and %v", state.Snapshot.Tree, state.Contents)
+	}
+}
+
 func TestSessionsWithoutATokenAreReadOnly(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, nil)

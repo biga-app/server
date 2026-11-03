@@ -77,7 +77,15 @@ func (s *Store) Q() *Queries { return &Queries{db: s.pool} }
 // Tx runs fn in a transaction, committing when it returns nil and rolling
 // back otherwise.
 func (s *Store) Tx(ctx context.Context, fn func(*Queries) error) error {
-	tx, err := s.pool.Begin(ctx)
+	return s.transact(ctx, pgx.TxOptions{}, fn)
+}
+
+func (s *Store) ReadTx(ctx context.Context, fn func(*Queries) error) error {
+	return s.transact(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, fn)
+}
+
+func (s *Store) transact(ctx context.Context, opts pgx.TxOptions, fn func(*Queries) error) error {
+	tx, err := s.pool.BeginTx(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}

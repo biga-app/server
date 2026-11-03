@@ -8,8 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"golang.org/x/sync/errgroup"
-
 	"github.com/biga-sh/server/internal/store"
 	"github.com/biga-sh/server/internal/wire"
 )
@@ -25,34 +23,32 @@ const (
 // its tree, recent checkpoints and, for small sessions, every file's
 // content.
 func (s *Service) State(ctx context.Context, id string) (*wire.SessionState, error) {
-	q := s.store.Q()
+	var state *wire.SessionState
+	err := s.store.ReadTx(ctx, func(q *store.Queries) error {
+		var err error
+		state, err = s.readState(ctx, q, id)
+		return err
+	})
+	return state, err
+}
+
+func (s *Service) readState(ctx context.Context, q *store.Queries, id string) (*wire.SessionState, error) {
 	row, err := q.Session(ctx, id)
 	if err != nil {
 		return nil, sessionErr(err)
 	}
 
-	var (
-		snap        store.SnapshotRow
-		hasSnap     bool
-		checkpoints []store.CheckpointRow
-		heads       []store.HeadFile
-		fileCount   int
-		totalBytes  int64
-	)
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		var err error
-		snap, err = q.Snapshot(gctx, id)
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
-		hasSnap = err == nil
-		return err
-	})
-	g.Go(func() (err error) { checkpoints, err = q.Checkpoints(gctx, id, statePage, nil); return err })
-	g.Go(func() (err error) { heads, err = q.HeadFiles(gctx, id); return err })
-	g.Go(func() (err error) { fileCount, totalBytes, err = q.Stats(gctx, id); return err })
-	if err := g.Wait(); err != nil {
+	snap, err := q.Snapshot(ctx, id)
+	hasSnap := err == nil
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	checkpoints, err := q.Checkpoints(ctx, id, statePage, nil)
+	if err != nil {
+		return nil, err
+	}
+	heads, err := q.HeadFiles(ctx, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -62,25 +58,46 @@ func (s *Service) State(ctx context.Context, id string) (*wire.SessionState, err
 		Mode:        wire.ModeLazy,
 	}
 	if hasSnap {
-		tree := json.RawMessage(snap.Tree)
-		// The head files are the truth: they include every checkpoint since
-		// the snapshot was taken.
-		if len(heads) > 0 {
-			if tree, err = json.Marshal(treeFromHeads(heads)); err != nil {
-				return nil, err
-			}
+		tree, err := currentTree(snap.Tree, heads)
+		if err != nil {
+			return nil, err
 		}
 		state.Snapshot = &wire.StoredSnapshot{
 			SessionID: id, Tree: tree, Timestamp: snap.Timestamp.UnixMilli(), SequenceNum: snap.SequenceNum,
 		}
 	}
-	if totalBytes <= s.opts.EagerMaxBytes && fileCount <= s.opts.EagerMaxFiles {
+	var totalBytes int64
+	for _, head := range heads {
+		totalBytes += head.Size
+	}
+	if totalBytes <= s.opts.EagerMaxBytes && len(heads) <= s.opts.EagerMaxFiles {
 		if state.Contents, err = q.HeadContents(ctx, id); err != nil {
 			return nil, err
 		}
 		state.Mode = wire.ModeEager
 	}
 	return state, nil
+}
+
+func currentTree(snapshot []byte, heads []store.HeadFile) (json.RawMessage, error) {
+	if len(heads) > 0 {
+		return json.Marshal(treeFromHeads(heads))
+	}
+	var root wire.FileNode
+	if err := json.Unmarshal(snapshot, &root); err != nil {
+		return nil, err
+	}
+	removeSnapshotFiles(&root)
+	return json.Marshal(&root)
+}
+
+func removeSnapshotFiles(dir *wire.FileNode) {
+	dir.Children = slices.DeleteFunc(dir.Children, func(child *wire.FileNode) bool {
+		return child.Type == wire.NodeFile
+	})
+	for _, child := range dir.Children {
+		removeSnapshotFiles(child)
+	}
 }
 
 // Checkpoints returns a page of checkpoint summaries, newest first.

@@ -98,14 +98,6 @@ func (q *Queries) DeleteHeads(ctx context.Context, sessionID string, paths []str
 	return err
 }
 
-// Stats counts a session's current files and their total size.
-func (q *Queries) Stats(ctx context.Context, sessionID string) (files int, bytes int64, err error) {
-	err = q.db.QueryRow(ctx,
-		`SELECT count(*), coalesce(sum(size), 0) FROM files WHERE session_id = $1`,
-		sessionID).Scan(&files, &bytes)
-	return files, bytes, err
-}
-
 // SnapshotRow is a session's stored tree.
 type SnapshotRow struct {
 	Tree        []byte
