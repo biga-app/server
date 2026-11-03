@@ -12,6 +12,7 @@ type ExtensionGrant struct {
 }
 
 type CheckpointEvent struct {
+	Name         string `json:"name,omitempty"`
 	ID           string `json:"id"`
 	Type         string `json:"type"`
 	Version      int    `json:"version"`

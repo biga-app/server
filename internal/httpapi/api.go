@@ -120,6 +120,7 @@ func (a *API) routes() {
 	m.HandleFunc("PUT /api/sessions/{id}", write(readTimeout, a.putSession))
 	m.HandleFunc("DELETE /api/sessions/{id}", write(readTimeout, a.endSession))
 	m.HandleFunc("POST /api/sessions/{id}/snapshot", write(uploadTimeout, a.snapshot))
+	m.HandleFunc("PUT /api/sessions/{id}/checkpoints/marks/{key}", write(readTimeout, a.markCheckpoint))
 	m.HandleFunc("POST /api/sessions/{id}/checkpoint", write(uploadTimeout, a.checkpoint))
 	m.HandleFunc("POST /api/sessions/{id}/heartbeat", write(readTimeout, a.heartbeat))
 	m.HandleFunc("GET /api/sessions/{id}/manifest", write(readTimeout, a.manifest))

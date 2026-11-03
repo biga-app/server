@@ -101,9 +101,13 @@ func (s *Service) ExtensionFeed(ctx context.Context, sessionID, token string, af
 			return err
 		}
 		for _, row := range rows {
+			eventType := "checkpoint.created"
+			if row.MarkName != "" {
+				eventType = "checkpoint.marked"
+			}
 			feed.Events = append(feed.Events, wire.CheckpointEvent{
 				ID:   sessionID + ":" + strconv.Itoa(row.Seq),
-				Type: "checkpoint.created", Version: 1, SessionID: sessionID,
+				Type: eventType, Name: row.MarkName, Version: 1, SessionID: sessionID,
 				Seq: row.Seq, CreatedAt: wire.Time(row.CreatedAt),
 				FilesChanged: row.FilesChanged, Additions: row.Additions, Deletions: row.Deletions,
 			})

@@ -165,6 +165,7 @@ type CheckpointChange struct {
 
 // CheckpointSummary is a checkpoint without its change list.
 type CheckpointSummary struct {
+	Named        bool   `json:"named,omitempty"`
 	SessionID    string `json:"sessionId"`
 	Seq          int    `json:"seq"`
 	Label        string `json:"label"`
