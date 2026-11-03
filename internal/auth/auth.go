@@ -21,14 +21,21 @@ import (
 // Prefixes make the two credential kinds recognizable in logs and secret
 // scanners.
 const (
-	TokenPrefix = "bgs_"
-	KeyPrefix   = "bgk_"
+	TokenPrefix     = "bgs_"
+	KeyPrefix       = "bgk_"
+	ExtensionPrefix = "bgx_"
 )
 
 // NewToken returns a fresh session token and the hash to store for it.
 func NewToken() (token string, hash []byte) {
 	token = TokenPrefix + random()
 	return token, HashToken(token)
+}
+
+func NewExtensionToken() string { return ExtensionPrefix + random() }
+
+func IsExtensionToken(token string) bool {
+	return len(token) == len(ExtensionPrefix)+base64.RawURLEncoding.EncodedLen(32) && strings.HasPrefix(token, ExtensionPrefix)
 }
 
 // HashToken is the stored form of a session token.

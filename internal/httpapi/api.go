@@ -123,6 +123,10 @@ func (a *API) routes() {
 	m.HandleFunc("POST /api/sessions/{id}/checkpoint", write(uploadTimeout, a.checkpoint))
 	m.HandleFunc("POST /api/sessions/{id}/heartbeat", write(readTimeout, a.heartbeat))
 	m.HandleFunc("GET /api/sessions/{id}/manifest", write(readTimeout, a.manifest))
+	m.HandleFunc("POST /api/sessions/{id}/extensions", write(readTimeout, a.createExtension))
+	m.HandleFunc("GET /api/sessions/{id}/extensions", write(readTimeout, a.listExtensions))
+	m.HandleFunc("DELETE /api/sessions/{id}/extensions/{extension}", write(readTimeout, a.revokeExtension))
+	m.HandleFunc("GET /api/sessions/{id}/extension-events", deadlines(readTimeout, writeTimeout, a.readLimit(a.extensionEvents)))
 
 	// Read by the viewer.
 	m.HandleFunc("GET /api/sessions/{id}", read(a.getSession))
