@@ -15,25 +15,25 @@ import (
 func (a *API) writeGate(w http.ResponseWriter, r *http.Request, limitKey string, lim rateLimit) (id, token string, ok bool) {
 	id = r.PathValue("id")
 	if !wire.ValidSessionID(id) {
-		fail(w, r, http.StatusBadRequest, "invalid_request", "Invalid session ID.", nil)
+		fail(w, r, http.StatusBadRequest, bigav1.ErrorCodeInvalidRequest, "Invalid session ID.", nil)
 		return "", "", false
 	}
 	client := clientKey(clientAddr(r.Context()))
 	if over, wait := a.limiter.Exceeded(r.Context(), "authfail:"+client, limitAuthFailures.n); over {
 		retryAfter(w, wait)
-		fail(w, r, http.StatusTooManyRequests, "rate_limited", "Too many failed authentication attempts. Try again later.", nil)
+		fail(w, r, http.StatusTooManyRequests, bigav1.ErrorCodeRateLimited, "Too many failed authentication attempts. Try again later.", nil)
 		return "", "", false
 	}
 	if a.keys.Required() {
 		key := r.Header.Get(auth.KeyHeader)
 		if key == "" {
-			fail(w, r, http.StatusUnauthorized, "access_key_required",
+			fail(w, r, http.StatusUnauthorized, bigav1.ErrorCodeAccessKeyRequired,
 				"This server only accepts broadcasts from people holding an access key.", nil)
 			return "", "", false
 		}
 		if !a.keys.Valid(key) {
 			a.authFailed(r)
-			fail(w, r, http.StatusUnauthorized, "access_key_invalid", "The access key is not valid on this server.", nil)
+			fail(w, r, http.StatusUnauthorized, bigav1.ErrorCodeAccessKeyInvalid, "The access key is not valid on this server.", nil)
 			return "", "", false
 		}
 	}
@@ -42,7 +42,7 @@ func (a *API) writeGate(w http.ResponseWriter, r *http.Request, limitKey string,
 	}
 	if ok, wait := a.limiter.Allow(r.Context(), limitKey, lim.n, lim.window); !ok {
 		retryAfter(w, wait)
-		fail(w, r, http.StatusTooManyRequests, "rate_limited", "Too many requests. Slow down and try again shortly.", nil)
+		fail(w, r, http.StatusTooManyRequests, bigav1.ErrorCodeRateLimited, "Too many requests. Slow down and try again shortly.", nil)
 		return "", "", false
 	}
 	return id, auth.BearerToken(r), true
@@ -62,7 +62,7 @@ func (a *API) owned(w http.ResponseWriter, r *http.Request, route string, lim ra
 		return "", "", false
 	}
 	if err := a.svc.Authorize(r.Context(), id, token); err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return "", "", false
 	}
 	return id, token, true
@@ -81,12 +81,12 @@ func (a *API) putSession(w http.ResponseWriter, r *http.Request) {
 	}
 	in := wire.SessionInputFromPB(&req)
 	if err := wire.ValidateSessionInput(&in); err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	grant, created, err := a.svc.PutSession(r.Context(), id, token, in)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	status := http.StatusOK
@@ -103,7 +103,7 @@ func (a *API) endSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.svc.EndSession(r.Context(), id, token); err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -123,18 +123,18 @@ func (a *API) snapshot(w http.ResponseWriter, r *http.Request) {
 	snap := wire.SnapshotFromPB(&msg)
 	encrypted, err := a.svc.Encrypted(r.Context(), id)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	files, err := wire.ValidateSnapshot(&snap, id, wire.TreeLimits{
 		MaxFiles: a.limits.SnapshotFiles, MaxFileBytes: a.limits.FileBytes, Encrypted: encrypted,
 	})
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	if err := a.svc.IngestSnapshot(r.Context(), id, token, &snap, files); err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	accepted(w)
@@ -154,15 +154,15 @@ func (a *API) checkpoint(w http.ResponseWriter, r *http.Request) {
 	up := wire.CheckpointUploadFromPB(&msg)
 	encrypted, err := a.svc.Encrypted(r.Context(), id)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	if err := wire.ValidateCheckpoint(&up, id, a.limits.CheckpointEntries, a.limits.FileBytes, encrypted); err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	if err := a.svc.IngestCheckpoint(r.Context(), id, token, &up); err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	accepted(w)
@@ -175,7 +175,7 @@ func (a *API) heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.svc.Heartbeat(r.Context(), id, token); err != nil {
-		a.serviceError(w, r, err, "inactive_session", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInactiveSession, "")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -189,7 +189,7 @@ func (a *API) manifest(w http.ResponseWriter, r *http.Request) {
 	}
 	m, err := a.svc.Manifest(r.Context(), id, token)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

@@ -9,6 +9,7 @@ import (
 
 	"github.com/biga-app/server/internal/events"
 	"github.com/biga-app/server/internal/wire"
+	bigav1 "github.com/biga-app/server/internal/wirepb/biga/v1"
 )
 
 // Live-stream timing.
@@ -76,7 +77,7 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := a.svc.Session(r.Context(), id)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 
@@ -85,9 +86,9 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		retryAfter(w, 30*time.Second)
 		if full {
-			fail(w, r, http.StatusServiceUnavailable, "server_busy", "The server is at its live-stream capacity.", nil)
+			fail(w, r, http.StatusServiceUnavailable, bigav1.ErrorCodeServerBusy, "The server is at its live-stream capacity.", nil)
 		} else {
-			fail(w, r, http.StatusTooManyRequests, "too_many_streams", "Too many open live streams from this client.", nil)
+			fail(w, r, http.StatusTooManyRequests, bigav1.ErrorCodeTooManyStreams, "Too many open live streams from this client.", nil)
 		}
 		return
 	}

@@ -16,14 +16,16 @@ import (
 	"encoding/base64"
 	"net/http"
 	"strings"
+
+	bigav1 "github.com/biga-app/server/internal/wirepb/biga/v1"
 )
 
 // Prefixes make the two credential kinds recognizable in logs and secret
 // scanners.
 const (
-	TokenPrefix     = "bgs_"
-	KeyPrefix       = "bgk_"
-	ExtensionPrefix = "bgx_"
+	TokenPrefix     = bigav1.TokenPrefixOwner
+	KeyPrefix       = bigav1.TokenPrefixAccessKey
+	ExtensionPrefix = bigav1.TokenPrefixExtension
 )
 
 // NewToken returns a fresh session token and the hash to store for it.
@@ -95,7 +97,7 @@ func (k *Keys) Valid(key string) bool {
 }
 
 // KeyHeader carries the access key.
-const KeyHeader = "X-Biga-Key"
+const KeyHeader = bigav1.HeaderAccessKey
 
 // BearerToken extracts the token from an "Authorization: Bearer" header.
 func BearerToken(r *http.Request) string {

@@ -11,6 +11,8 @@ import (
 	"runtime/debug"
 	"slices"
 	"time"
+
+	bigav1 "github.com/biga-app/server/internal/wirepb/biga/v1"
 )
 
 type ctxKey int
@@ -86,11 +88,11 @@ func (a *API) base(next http.Handler) http.Handler {
 				}
 				a.log.Error("panic serving request", "request_id", id, "panic", p, "stack", string(debug.Stack()))
 				if rec.status == 0 {
-					fail(rec, r, http.StatusInternalServerError, "internal_error", "An unexpected error occurred.", nil)
+					fail(rec, r, http.StatusInternalServerError, bigav1.ErrorCodeInternalError, "An unexpected error occurred.", nil)
 				}
 			}
 			level := slog.LevelInfo
-			if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+			if r.URL.Path == bigav1.RouteHealthzPath || r.URL.Path == bigav1.RouteReadyzPath {
 				level = slog.LevelDebug
 			}
 			a.log.Log(ctx, level, "request",
@@ -163,7 +165,7 @@ func (a *API) readLimit(next http.HandlerFunc) http.HandlerFunc {
 			key := "read:" + clientKey(clientAddr(r.Context()))
 			if ok, wait := a.limiter.Allow(r.Context(), key, per, time.Minute); !ok {
 				retryAfter(w, wait)
-				fail(w, r, http.StatusTooManyRequests, "rate_limited", "Too many requests. Slow down and try again shortly.", nil)
+				fail(w, r, http.StatusTooManyRequests, bigav1.ErrorCodeRateLimited, "Too many requests. Slow down and try again shortly.", nil)
 				return
 			}
 		}

@@ -17,7 +17,7 @@ import (
 func sessionID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	id := r.PathValue("id")
 	if !wire.ValidSessionID(id) {
-		fail(w, r, http.StatusBadRequest, "invalid_request", "Invalid session ID.", nil)
+		fail(w, r, http.StatusBadRequest, bigav1.ErrorCodeInvalidRequest, "Invalid session ID.", nil)
 		return "", false
 	}
 	return id, true
@@ -29,7 +29,7 @@ func pageParams(w http.ResponseWriter, r *http.Request) (limit int, before *int,
 	if raw := q.Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 {
-			fail(w, r, http.StatusBadRequest, "invalid_request", "limit must be a positive integer.", nil)
+			fail(w, r, http.StatusBadRequest, bigav1.ErrorCodeInvalidRequest, "limit must be a positive integer.", nil)
 			return 0, nil, false
 		}
 		limit = n
@@ -37,7 +37,7 @@ func pageParams(w http.ResponseWriter, r *http.Request) (limit int, before *int,
 	if raw := q.Get("before"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 0 || n > math.MaxInt32 {
-			fail(w, r, http.StatusBadRequest, "invalid_request", "before must be a checkpoint number.", nil)
+			fail(w, r, http.StatusBadRequest, bigav1.ErrorCodeInvalidRequest, "before must be a checkpoint number.", nil)
 			return 0, nil, false
 		}
 		before = &n
@@ -49,11 +49,11 @@ func pageParams(w http.ResponseWriter, r *http.Request) (limit int, before *int,
 func filePath(w http.ResponseWriter, r *http.Request) (string, bool) {
 	p := r.URL.Query().Get("path")
 	if p == "" {
-		fail(w, r, http.StatusBadRequest, "invalid_request", "Missing 'path' query parameter.", nil)
+		fail(w, r, http.StatusBadRequest, bigav1.ErrorCodeInvalidRequest, "Missing 'path' query parameter.", nil)
 		return "", false
 	}
 	if err := wire.ValidPath(p); err != nil {
-		fail(w, r, http.StatusBadRequest, "invalid_request", "Invalid 'path' query parameter: "+err.Error()+".", nil)
+		fail(w, r, http.StatusBadRequest, bigav1.ErrorCodeInvalidRequest, "Invalid 'path' query parameter: "+err.Error()+".", nil)
 		return "", false
 	}
 	return p, true
@@ -66,7 +66,7 @@ func (a *API) getSession(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := a.svc.Session(r.Context(), id)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -80,12 +80,12 @@ func (a *API) state(w http.ResponseWriter, r *http.Request) {
 	}
 	st, err := a.svc.State(r.Context(), id)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	msg, err := wire.StateToPB(st)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -103,7 +103,7 @@ func (a *API) checkpoints(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := a.svc.Checkpoints(r.Context(), id, limit, before)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -117,12 +117,12 @@ func (a *API) checkpointBySeq(w http.ResponseWriter, r *http.Request) {
 	}
 	seq, err := strconv.Atoi(r.PathValue("seq"))
 	if err != nil || seq < 0 || seq > math.MaxInt32 {
-		fail(w, r, http.StatusBadRequest, "invalid_request", "Invalid checkpoint seq.", nil)
+		fail(w, r, http.StatusBadRequest, bigav1.ErrorCodeInvalidRequest, "Invalid checkpoint seq.", nil)
 		return
 	}
 	cp, err := a.svc.Checkpoint(r.Context(), id, seq)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "Checkpoint was not found.")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "Checkpoint was not found.")
 		return
 	}
 	// A checkpoint never changes once written.
@@ -144,12 +144,12 @@ func (a *API) file(w http.ResponseWriter, r *http.Request) {
 		ref = "latest"
 	}
 	if len(ref) > 64 {
-		fail(w, r, http.StatusBadRequest, "invalid_request", "Invalid 'ref' query parameter.", nil)
+		fail(w, r, http.StatusBadRequest, bigav1.ErrorCodeInvalidRequest, "Invalid 'ref' query parameter.", nil)
 		return
 	}
 	fc, err := a.svc.FileContent(r.Context(), id, p, ref)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "File version was not found.")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "File version was not found.")
 		return
 	}
 	// Content addressed by hash is immutable; "latest" and checkpoint refs
@@ -177,7 +177,7 @@ func (a *API) fileHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	history, err := a.svc.FileHistory(r.Context(), id, p, limit, before)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -188,12 +188,12 @@ func (a *API) fileHistory(w http.ResponseWriter, r *http.Request) {
 func (a *API) cron(w http.ResponseWriter, r *http.Request) {
 	token := auth.BearerToken(r)
 	if subtle.ConstantTimeCompare([]byte(token), []byte(a.cronSecret)) != 1 {
-		fail(w, r, http.StatusUnauthorized, "unauthorized", "Invalid cron credentials.", nil)
+		fail(w, r, http.StatusUnauthorized, bigav1.ErrorCodeUnauthorized, "Invalid cron credentials.", nil)
 		return
 	}
 	res, err := a.svc.Cleanup(r.Context())
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	respondJSON(w, r, http.StatusOK, res)
@@ -211,7 +211,7 @@ func (a *API) readyz(w http.ResponseWriter, r *http.Request) {
 	if a.ready != nil {
 		if err := a.ready(ctx); err != nil {
 			a.log.Warn("not ready", "error", err)
-			fail(w, r, http.StatusServiceUnavailable, "not_ready", "A dependency is not answering.", nil)
+			fail(w, r, http.StatusServiceUnavailable, bigav1.ErrorCodeNotReady, "A dependency is not answering.", nil)
 			return
 		}
 	}

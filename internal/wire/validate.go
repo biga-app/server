@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	bigav1 "github.com/biga-app/server/internal/wirepb/biga/v1"
 )
 
 // ValidationError reports a malformed request. It is safe to show to the
@@ -32,16 +34,16 @@ func invalid(field, format string, args ...any) *ValidationError {
 
 // Limits on request content.
 const (
-	MaxPathBytes   = 4096
-	MaxNameBytes   = 1024
-	MaxTreeDepth   = 256
-	MaxTitleRunes  = 120
-	MaxDescRunes   = 500
-	MaxGroupIDLen  = 64
+	MaxPathBytes   = bigav1.LimitMaxPathBytes
+	MaxNameBytes   = bigav1.LimitMaxNameBytes
+	MaxTreeDepth   = bigav1.LimitMaxTreeDepth
+	MaxTitleRunes  = bigav1.LimitMaxTitleRunes
+	MaxDescRunes   = bigav1.LimitMaxDescriptionRunes
+	MaxGroupIDLen  = bigav1.LimitMaxGroupIDLength
 	maxStoredValue = math.MaxInt32
 )
 
-var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+var sessionIDPattern = regexp.MustCompile(bigav1.PatternSessionID)
 
 // ValidSessionID reports whether id is a well-formed session ID: a letter
 // or digit, then up to 63 letters, digits, '_' or '-'. The same rule the CLI
@@ -50,7 +52,7 @@ func ValidSessionID(id string) bool { return sessionIDPattern.MatchString(id) }
 
 // ValidHash reports whether h is a hex SHA-256 digest.
 func ValidHash(h string) bool {
-	if len(h) != 64 {
+	if len(h) != bigav1.LimitHashHexLength {
 		return false
 	}
 	for i := range len(h) {

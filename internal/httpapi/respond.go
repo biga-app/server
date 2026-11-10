@@ -54,7 +54,7 @@ func wantsProto(r *http.Request) bool {
 func negotiate(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !wantsProto(r) {
-			fail(w, r, http.StatusNotAcceptable, "not_acceptable",
+			fail(w, r, http.StatusNotAcceptable, bigav1.ErrorCodeNotAcceptable,
 				"This server speaks protobuf (Accept: application/x-protobuf). Update the biga CLI and reload the viewer.", nil)
 			return
 		}
@@ -109,7 +109,7 @@ func respondJSONPrivate(w http.ResponseWriter, r *http.Request, status int, data
 func writeProto(w http.ResponseWriter, r *http.Request, status int, msg proto.Message, compressible bool) {
 	body, err := proto.Marshal(msg)
 	if err != nil {
-		http.Error(w, `{"ok":false,"error":{"code":"internal_error","message":"An unexpected error occurred."}}`, http.StatusInternalServerError)
+		http.Error(w, `{"ok":false,"error":{"code":bigav1.ErrorCodeInternalError,"message":"An unexpected error occurred."}}`, http.StatusInternalServerError)
 		return
 	}
 	writeBody(w, r, status, protoType, body, compressible)
@@ -120,7 +120,7 @@ func writeJSON(w http.ResponseWriter, r *http.Request, status int, v any, compre
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
-		http.Error(w, `{"ok":false,"error":{"code":"internal_error","message":"An unexpected error occurred."}}`, http.StatusInternalServerError)
+		http.Error(w, `{"ok":false,"error":{"code":bigav1.ErrorCodeInternalError,"message":"An unexpected error occurred."}}`, http.StatusInternalServerError)
 		return
 	}
 	writeBody(w, r, status, "application/json; charset=utf-8", buf.Bytes(), compressible)

@@ -18,7 +18,7 @@ func (a *API) markCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	key := r.PathValue("key")
 	if !wire.ValidSessionID(key) || len(key) < 16 {
-		fail(w, r, http.StatusBadRequest, "invalid_request", "Invalid checkpoint mark key.", nil)
+		fail(w, r, http.StatusBadRequest, bigav1.ErrorCodeInvalidRequest, "Invalid checkpoint mark key.", nil)
 		return
 	}
 	var input bigav1.MarkCheckpointRequest
@@ -28,16 +28,16 @@ func (a *API) markCheckpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	label := strings.TrimSpace(input.GetName())
 	if label == "" || len(label) > 120 || strings.ContainsFunc(label, unicode.IsControl) {
-		fail(w, r, http.StatusBadRequest, "invalid_request", "Use a single-line checkpoint name of 1 to 120 bytes.", nil)
+		fail(w, r, http.StatusBadRequest, bigav1.ErrorCodeInvalidRequest, "Use a single-line checkpoint name of 1 to 120 bytes.", nil)
 		return
 	}
 	result, err := a.svc.MarkCheckpoint(r.Context(), id, token, key, label)
 	if errors.Is(err, service.ErrMarkKeyConflict) {
-		fail(w, r, http.StatusConflict, "mark_key_conflict", "This mark key was already used with another name.", nil)
+		fail(w, r, http.StatusConflict, bigav1.ErrorCodeMarkKeyConflict, "This mark key was already used with another name.", nil)
 		return
 	}
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "Broadcast at least one checkpoint before adding a mark.")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "Broadcast at least one checkpoint before adding a mark.")
 		return
 	}
 	respondPrivate(w, r, http.StatusOK, wire.SummaryToPB(result))

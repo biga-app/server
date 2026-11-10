@@ -10,11 +10,13 @@ import (
 	"strings"
 
 	"google.golang.org/protobuf/proto"
+
+	bigav1 "github.com/biga-app/server/internal/wirepb/biga/v1"
 )
 
 const (
-	protoType  = "application/x-protobuf"
-	streamType = "application/vnd.biga.stream+protobuf"
+	protoType  = bigav1.MediaTypeProtobuf
+	streamType = bigav1.MediaTypeStream
 
 	// maxMessageDepth bounds how deeply a request's messages may nest, well
 	// above the snapshot tree depth the validator allows.

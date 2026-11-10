@@ -33,6 +33,7 @@ import (
 	"github.com/biga-app/server/internal/store"
 	"github.com/biga-app/server/internal/version"
 	"github.com/biga-app/server/internal/wire"
+	bigav1 "github.com/biga-app/server/internal/wirepb/biga/v1"
 )
 
 const usage = `biga-server runs the biga session server.
@@ -436,7 +437,7 @@ func healthcheck(ctx context.Context, args []string) error {
 			client.Transport = &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				return (&net.Dialer{}).DialContext(ctx, "unix", sock)
 			}}
-			url = "http://unix/healthz"
+			url = "http://unix" + bigav1.RouteHealthzPath
 		} else {
 			addr = strings.TrimPrefix(strings.TrimPrefix(addr, "tcp4:"), "tcp6:")
 			host, port, err := net.SplitHostPort(addr)
@@ -449,7 +450,7 @@ func healthcheck(ctx context.Context, args []string) error {
 			case "::":
 				host = "::1"
 			}
-			url = scheme + "://" + net.JoinHostPort(host, port) + "/healthz"
+			url = scheme + "://" + net.JoinHostPort(host, port) + bigav1.RouteHealthzPath
 		}
 	}
 	// The URL comes from the operator's own flag or BIGA_LISTEN.

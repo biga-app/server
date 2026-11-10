@@ -20,12 +20,12 @@ func (a *API) missingBlobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := wire.ValidateHashes(req.GetHashes(), a.limits.SnapshotFiles); err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	missing, err := a.svc.MissingBlobs(r.Context(), id, token, req.GetHashes())
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	respond(w, r, http.StatusOK, &bigav1.MissingBlobsResponse{Hashes: missing})
@@ -45,15 +45,15 @@ func (a *API) uploadBlobs(w http.ResponseWriter, r *http.Request) {
 	blobs := wire.BlobsFromPB(&req)
 	encrypted, err := a.svc.Encrypted(r.Context(), id)
 	if err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	if err := wire.ValidateBlobs(blobs, a.limits.CheckpointEntries, a.limits.FileBytes, encrypted); err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	if err := a.svc.StoreBlobs(r.Context(), id, token, blobs); err != nil {
-		a.serviceError(w, r, err, "invalid_state", "")
+		a.serviceError(w, r, err, bigav1.ErrorCodeInvalidState, "")
 		return
 	}
 	accepted(w)

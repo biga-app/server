@@ -17,6 +17,7 @@ import (
 	"github.com/biga-app/server/internal/events"
 	"github.com/biga-app/server/internal/ratelimit"
 	"github.com/biga-app/server/internal/service"
+	bigav1 "github.com/biga-app/server/internal/wirepb/biga/v1"
 )
 
 // Options configures the API.
@@ -118,36 +119,36 @@ func (a *API) routes() {
 	}
 
 	// Written by the CLI.
-	m.HandleFunc("PUT /api/sessions/{id}", write(readTimeout, a.putSession))
-	m.HandleFunc("DELETE /api/sessions/{id}", write(readTimeout, a.endSession))
-	m.HandleFunc("POST /api/sessions/{id}/snapshot", write(uploadTimeout, a.snapshot))
-	m.HandleFunc("PUT /api/sessions/{id}/checkpoints/marks/{key}", write(readTimeout, a.markCheckpoint))
-	m.HandleFunc("POST /api/sessions/{id}/blobs/missing", write(readTimeout, a.missingBlobs))
-	m.HandleFunc("POST /api/sessions/{id}/blobs", write(uploadTimeout, a.uploadBlobs))
-	m.HandleFunc("POST /api/sessions/{id}/checkpoint", write(uploadTimeout, a.checkpoint))
-	m.HandleFunc("POST /api/sessions/{id}/heartbeat", write(readTimeout, a.heartbeat))
-	m.HandleFunc("GET /api/sessions/{id}/manifest", write(readTimeout, a.manifest))
-	m.HandleFunc("POST /api/sessions/{id}/extensions", write(readTimeout, a.createExtension))
-	m.HandleFunc("GET /api/sessions/{id}/extensions", write(readTimeout, a.listExtensions))
-	m.HandleFunc("DELETE /api/sessions/{id}/extensions/{extension}", write(readTimeout, a.revokeExtension))
-	m.HandleFunc("GET /api/sessions/{id}/extension-events", deadlines(readTimeout, writeTimeout, a.readLimit(a.extensionEvents)))
+	m.HandleFunc(bigav1.RoutePutSession, write(readTimeout, a.putSession))
+	m.HandleFunc(bigav1.RouteEndSession, write(readTimeout, a.endSession))
+	m.HandleFunc(bigav1.RoutePostSnapshot, write(uploadTimeout, a.snapshot))
+	m.HandleFunc(bigav1.RoutePutCheckpointMark, write(readTimeout, a.markCheckpoint))
+	m.HandleFunc(bigav1.RouteMissingBlobs, write(readTimeout, a.missingBlobs))
+	m.HandleFunc(bigav1.RouteUploadBlobs, write(uploadTimeout, a.uploadBlobs))
+	m.HandleFunc(bigav1.RoutePostCheckpoint, write(uploadTimeout, a.checkpoint))
+	m.HandleFunc(bigav1.RouteHeartbeat, write(readTimeout, a.heartbeat))
+	m.HandleFunc(bigav1.RouteGetManifest, write(readTimeout, a.manifest))
+	m.HandleFunc(bigav1.RouteCreateExtension, write(readTimeout, a.createExtension))
+	m.HandleFunc(bigav1.RouteListExtensions, write(readTimeout, a.listExtensions))
+	m.HandleFunc(bigav1.RouteRevokeExtension, write(readTimeout, a.revokeExtension))
+	m.HandleFunc(bigav1.RouteExtensionEvents, deadlines(readTimeout, writeTimeout, a.readLimit(a.extensionEvents)))
 
 	// Read by the viewer.
-	m.HandleFunc("GET /api/sessions/{id}", read(a.getSession))
-	m.HandleFunc("GET /api/sessions/{id}/state", read(a.state))
-	m.HandleFunc("GET /api/sessions/{id}/checkpoints", read(a.checkpoints))
-	m.HandleFunc("GET /api/sessions/{id}/checkpoints/{seq}", read(a.checkpointBySeq))
-	m.HandleFunc("GET /api/sessions/{id}/file", read(a.file))
-	m.HandleFunc("GET /api/sessions/{id}/file/history", read(a.fileHistory))
-	m.HandleFunc("GET /api/sessions/{id}/stream", a.cors(a.readLimit(negotiate(a.stream))))
-	m.HandleFunc("OPTIONS /api/sessions/{path...}", a.cors(a.preflight))
+	m.HandleFunc(bigav1.RouteGetSession, read(a.getSession))
+	m.HandleFunc(bigav1.RouteGetState, read(a.state))
+	m.HandleFunc(bigav1.RouteListCheckpoints, read(a.checkpoints))
+	m.HandleFunc(bigav1.RouteGetCheckpoint, read(a.checkpointBySeq))
+	m.HandleFunc(bigav1.RouteGetFile, read(a.file))
+	m.HandleFunc(bigav1.RouteGetFileHistory, read(a.fileHistory))
+	m.HandleFunc(bigav1.RouteStream, a.cors(a.readLimit(negotiate(a.stream))))
+	m.HandleFunc(bigav1.RoutePreflight, a.cors(a.preflight))
 
 	if a.cronSecret != "" {
-		m.HandleFunc("GET /api/cron/cleanup", deadlines(writeTimeout, writeTimeout+time.Minute, a.cron))
+		m.HandleFunc(bigav1.RouteCronCleanup, deadlines(writeTimeout, writeTimeout+time.Minute, a.cron))
 	}
-	m.HandleFunc("GET /healthz", a.healthz)
-	m.HandleFunc("GET /readyz", a.readyz)
+	m.HandleFunc(bigav1.RouteHealthz, a.healthz)
+	m.HandleFunc(bigav1.RouteReadyz, a.readyz)
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fail(w, r, http.StatusNotFound, "not_found", "No such endpoint.", nil)
+		fail(w, r, http.StatusNotFound, bigav1.ErrorCodeNotFound, "No such endpoint.", nil)
 	})
 }
