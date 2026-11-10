@@ -40,7 +40,7 @@ docker run -p 8080:8080 \
   -e DATABASE_URL='postgres://biga:…@db:5432/biga' \
   -e BIGA_PUBLIC_URL=https://biga.example.com \
   -e BIGA_TRUSTED_PROXIES=private \
-  ghcr.io/biga-app/server:1
+  ghcr.io/biga-app/server:2
 ```
 
 ### Build from source
