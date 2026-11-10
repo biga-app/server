@@ -394,7 +394,7 @@ func TestSessionsWithoutATokenAreReadOnly(t *testing.T) {
 	h := newHarness(t, nil)
 	id := newSessionID(t)
 	// A row with no owner token, as created before tokens existed.
-	if _, _, err := h.st.Q().InsertSession(t.Context(), id, "legacy", nil, nil, nil); err != nil {
+	if _, _, err := h.st.Q().InsertSession(t.Context(), id, "legacy", nil, nil, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	base := "/api/sessions/" + id

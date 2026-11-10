@@ -23,15 +23,32 @@ link. A session ID is a capability to watch: share it and anyone can read
 every file in it. Treat links like the files themselves, and keep secrets out
 of broadcast folders (the CLI skips `.env`, keys and similar by default).
 
+### Encrypted sessions
+
+A session created with `biga start --encrypt` keeps its contents from the server
+as well. The CLI seals each file with AES-256-GCM under a key derived from one
+random secret, which lives only on the broadcaster's machine and in the share
+link's `#fragment`. Browsers never send the fragment, so the server, its
+database, its logs and any proxy in front of it never see the key. The server
+stores sealed bytes and cannot read or count lines in them. Identical files share an id, so it can tell that two files match.
+
+What an operator still sees: file and folder names, sizes, the tree's shape,
+how many lines each save changed (reported by the client), save times, titles
+and the session's dates. Anyone with the whole link reads everything. The key
+cannot be recovered if it is lost. A session never changes between encrypted and
+not. Full details are in the
+[Encryption](https://github.com/biga-app/website/blob/main/apps/web/content/docs/encryption.mdx)
+page.
+
 ### Trust boundaries
 
 | Boundary | Defense |
 | --- | --- |
 | CLI → server writes | Owner token (256-bit, stored as SHA-256, compared in constant time). Optional server-wide access keys. Authorization happens before the body is read. |
 | Anyone → server reads | Public by design. Per-client rate limits, stream caps, validated IDs and query parameters, bounded page sizes. |
-| Request bodies | Size caps after decompression, strict JSON, schema and path validation, hash verification of text content, a per-session storage quota. |
+| Request bodies | Size caps after decompression, protobuf decoding with a depth limit, schema and path validation, hash verification of text content (not possible for encrypted sessions, whose ids are keyed), a per-session storage quota. |
 | Server → database | Parameterized SQL only; batch writes pass arrays. Each upload is one transaction with the session row locked. |
-| Server → browsers | JSON only, `nosniff`, `default-src 'none'` CSP, no framing, CORS on reads only and only for configured origins. |
+| Server → browsers | Protobuf or JSON only, `nosniff`, `default-src 'none'` CSP, no framing, CORS on reads only and only for configured origins. |
 | Proxies → server | `X-Forwarded-For` is believed only from `BIGA_TRUSTED_PROXIES`. |
 
 ### Credentials at rest

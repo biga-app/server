@@ -42,6 +42,9 @@ func (a *API) serviceError(w http.ResponseWriter, r *http.Request, err error, in
 		a.authFailed(r)
 		fail(w, r, http.StatusForbidden, "session_locked",
 			"This session was created before owner tokens and can no longer be written to. Start a new session.", nil)
+	case errors.Is(err, service.ErrEncryptionMismatch):
+		fail(w, r, http.StatusConflict, "encryption_mismatch",
+			"A session cannot change between encrypted and not. Start a new one.", nil)
 	case errors.Is(err, service.ErrQuota):
 		fail(w, r, http.StatusRequestEntityTooLarge, "storage_quota_exceeded",
 			"This session has reached its storage limit. Start a new session.", nil)

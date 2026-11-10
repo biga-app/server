@@ -121,8 +121,13 @@ func (a *API) snapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snap := wire.SnapshotFromPB(&msg)
+	encrypted, err := a.svc.Encrypted(r.Context(), id)
+	if err != nil {
+		a.serviceError(w, r, err, "invalid_state", "")
+		return
+	}
 	files, err := wire.ValidateSnapshot(&snap, id, wire.TreeLimits{
-		MaxFiles: a.limits.SnapshotFiles, MaxFileBytes: a.limits.FileBytes,
+		MaxFiles: a.limits.SnapshotFiles, MaxFileBytes: a.limits.FileBytes, Encrypted: encrypted,
 	})
 	if err != nil {
 		a.serviceError(w, r, err, "invalid_state", "")
@@ -147,7 +152,12 @@ func (a *API) checkpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	up := wire.CheckpointUploadFromPB(&msg)
-	if err := wire.ValidateCheckpoint(&up, id, a.limits.CheckpointEntries, a.limits.FileBytes); err != nil {
+	encrypted, err := a.svc.Encrypted(r.Context(), id)
+	if err != nil {
+		a.serviceError(w, r, err, "invalid_state", "")
+		return
+	}
+	if err := wire.ValidateCheckpoint(&up, id, a.limits.CheckpointEntries, a.limits.FileBytes, encrypted); err != nil {
 		a.serviceError(w, r, err, "invalid_state", "")
 		return
 	}

@@ -136,7 +136,7 @@ func TestValidateCheckpoint(t *testing.T) {
 		{Path: "a", ChangeType: Added, Hash: &h, Size: 1, Content: "x"},
 		{Path: "b", ChangeType: Deleted, Hash: &h, Content: "leftover"},
 	}}
-	if err := ValidateCheckpoint(up, "s", 10, 1<<20); err != nil {
+	if err := ValidateCheckpoint(up, "s", 10, 1<<20, false); err != nil {
 		t.Fatal(err)
 	}
 	if up.Entries[1].Hash != nil || up.Entries[1].Content != "" {
@@ -153,12 +153,12 @@ func TestValidateCheckpoint(t *testing.T) {
 		"too large":    {Path: "a", ChangeType: Added, Hash: new(HashOf(strings.Repeat("x", 11))), Content: strings.Repeat("x", 11)},
 	} {
 		up := &CheckpointUpload{SessionID: "s", Timestamp: 1, Entries: []CheckpointEntry{e}}
-		if err := ValidateCheckpoint(up, "s", 10, 10); err == nil {
+		if err := ValidateCheckpoint(up, "s", 10, 10, false); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	tooMany := &CheckpointUpload{SessionID: "s", Timestamp: 1, Entries: make([]CheckpointEntry, 3)}
-	if err := ValidateCheckpoint(tooMany, "s", 2, 10); err == nil {
+	if err := ValidateCheckpoint(tooMany, "s", 2, 10, false); err == nil {
 		t.Error("too many entries accepted")
 	}
 }
@@ -183,5 +183,87 @@ func TestValidateSessionInput(t *testing.T) {
 	// Runes, not bytes: a title of 120 accented letters is fine.
 	if err := ValidateSessionInput(&CreateSessionInput{Title: ok(strings.Repeat("é", MaxTitleRunes))}); err != nil {
 		t.Errorf("120-rune title rejected: %v", err)
+	}
+}
+
+func TestEncryptedSessionsAreNotHashChecked(t *testing.T) {
+	forged := HashOf("something else entirely")
+	sealed := "bytes the server cannot read"
+
+	snap := &FileSnapshot{SessionID: "s", Timestamp: 1, Tree: &FileNode{Type: NodeDirectory, Name: "p", Path: ".", Children: []*FileNode{
+		{Type: NodeFile, Name: "a", Path: "a", Hash: forged, Size: 10, Content: sealed, Lines: 4},
+	}}}
+	if _, err := ValidateSnapshot(snap, "s", TreeLimits{MaxFiles: 10, MaxFileBytes: 1 << 20}); err == nil {
+		t.Error("an unencrypted session must still check hashes")
+	}
+	snap.Tree.Children[0].Content = sealed
+	files, err := ValidateSnapshot(snap, "s", TreeLimits{MaxFiles: 10, MaxFileBytes: 1 << 20, Encrypted: true})
+	if err != nil || len(files) != 1 || files[0].Lines != 4 || files[0].Content != sealed {
+		t.Fatalf("files = %+v, %v", files, err)
+	}
+
+	up := &CheckpointUpload{SessionID: "s", Timestamp: 1, Entries: []CheckpointEntry{
+		{Path: "a", ChangeType: Modified, Hash: &forged, Size: 3, Content: sealed, Additions: 5, Deletions: 2},
+		{Path: "b", ChangeType: Deleted, Deletions: 7},
+		{Path: "c", ChangeType: Added, Hash: &forged, Size: 3, Content: sealed, Additions: -4, Deletions: 1 << 40},
+	}}
+	if err := ValidateCheckpoint(up, "s", 10, 1<<20, true); err != nil {
+		t.Fatal(err)
+	}
+	if e := up.Entries[0]; e.Additions != 5 || e.Deletions != 2 {
+		t.Errorf("an encrypted session keeps the client's counts: %+v", e)
+	}
+	if up.Entries[1].Deletions != 7 {
+		t.Errorf("a deletion keeps its count: %+v", up.Entries[1])
+	}
+	if e := up.Entries[2]; e.Additions != 0 || e.Deletions != maxStoredValue {
+		t.Errorf("counts are kept in range: %+v", e)
+	}
+
+	plain := &CheckpointUpload{SessionID: "s", Timestamp: 1, Entries: []CheckpointEntry{
+		{Path: "a", ChangeType: Added, Hash: new(HashOf("x")), Size: 1, Content: "x", Additions: 999, Deletions: 999},
+	}}
+	if err := ValidateCheckpoint(plain, "s", 10, 1<<20, false); err != nil {
+		t.Fatal(err)
+	}
+	if e := plain.Entries[0]; e.Additions != 0 || e.Deletions != 0 {
+		t.Errorf("an unencrypted session does not trust the client's counts: %+v", e)
+	}
+	if err := ValidateCheckpoint(&CheckpointUpload{SessionID: "s", Timestamp: 1, Entries: []CheckpointEntry{
+		{Path: "a", ChangeType: Added, Hash: &forged, Size: 1, Content: "x"},
+	}}, "s", 10, 1<<20, false); err == nil {
+		t.Error("an unencrypted session must reject a hash that does not match")
+	}
+}
+
+func TestEncryptedBlobsAreNotHashChecked(t *testing.T) {
+	blobs := func() []File { return []File{{Hash: HashOf("other"), Content: "sealed"}} }
+	if err := ValidateBlobs(blobs(), 10, 1<<20, false); err == nil {
+		t.Error("an unencrypted session must check blob hashes")
+	}
+	if err := ValidateBlobs(blobs(), 10, 1<<20, true); err != nil {
+		t.Errorf("an encrypted session cannot: %v", err)
+	}
+	if err := ValidateBlobs([]File{{Hash: "nope", Content: "x"}}, 10, 1<<20, true); err == nil {
+		t.Error("a blob id must still be a well-formed hash")
+	}
+	if err := ValidateBlobs([]File{{Hash: HashOf("x"), Content: "x"}, {Hash: HashOf("x"), Content: "x"}}, 10, 1<<20, true); err == nil {
+		t.Error("duplicates are refused")
+	}
+}
+
+func TestSnapshotFilesWithoutContentAreDeferredButNotForEmptyFiles(t *testing.T) {
+	mk := func(hash string, size int64) *FileSnapshot {
+		return &FileSnapshot{SessionID: "s", Timestamp: 1, Tree: &FileNode{Type: NodeDirectory, Name: "p", Path: ".", Children: []*FileNode{
+			{Type: NodeFile, Name: "a", Path: "a", Hash: hash, Size: size},
+		}}}
+	}
+	files, err := ValidateSnapshot(mk(HashOf("body"), 4), "s", TreeLimits{MaxFiles: 10, MaxFileBytes: 1 << 20})
+	if err != nil || !files[0].Deferred {
+		t.Fatalf("a text file without content is deferred: %+v, %v", files, err)
+	}
+	files, err = ValidateSnapshot(mk(HashOf(""), 0), "s", TreeLimits{MaxFiles: 10, MaxFileBytes: 1 << 20})
+	if err != nil || files[0].Deferred {
+		t.Fatalf("an empty file needs no blob: %+v, %v", files, err)
 	}
 }

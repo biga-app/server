@@ -22,7 +22,11 @@ func (s *Service) IngestSnapshot(ctx context.Context, id, token string, snap *wi
 	if err != nil {
 		return fmt.Errorf("encode tree: %w", err)
 	}
-	blobs := encodeFiles(files)
+	encrypted, err := s.Encrypted(ctx, id)
+	if err != nil {
+		return err
+	}
+	blobs := encodeFiles(files, encrypted)
 	now := s.now()
 
 	var cp *wire.Checkpoint
@@ -54,25 +58,32 @@ func (s *Service) IngestSnapshot(ctx context.Context, id, token string, snap *wi
 			priorByPath[p.Path] = p
 		}
 		incoming := make(map[string]bool, len(files))
-		var needed []string
 		for _, f := range files {
 			incoming[f.Path] = true
-			if p, ok := priorByPath[f.Path]; ok && p.Hash != f.Hash && !f.Binary && !p.Binary && !f.Deferred {
-				needed = append(needed, p.Hash)
+		}
+		// Sealed content cannot be read to count lines; the client reports them.
+		var (
+			priorBlobs map[string]store.Blob
+			counts     map[string]lineCount
+		)
+		if !sess.Encrypted {
+			var needed []string
+			for _, f := range files {
+				if p, ok := priorByPath[f.Path]; ok && p.Hash != f.Hash && !f.Binary && !p.Binary && !f.Deferred {
+					needed = append(needed, p.Hash)
+				}
 			}
-		}
-		for _, p := range prior {
-			if !incoming[p.Path] && !p.Binary {
-				needed = append(needed, p.Hash)
+			for _, p := range prior {
+				if !incoming[p.Path] && !p.Binary {
+					needed = append(needed, p.Hash)
+				}
 			}
-		}
-		priorBlobs, err := s.readBlobs(ctx, q, sess, needed)
-		if err != nil {
-			return err
-		}
-		counts, err := s.deferredCounts(ctx, q, sess, files, priorByPath)
-		if err != nil {
-			return err
+			if priorBlobs, err = s.readBlobs(ctx, q, sess, needed); err != nil {
+				return err
+			}
+			if counts, err = s.deferredCounts(ctx, q, sess, files, priorByPath); err != nil {
+				return err
+			}
 		}
 
 		var c changeSet
@@ -85,11 +96,15 @@ func (s *Service) IngestSnapshot(ctx context.Context, id, token string, snap *wi
 			switch {
 			case existed:
 				ch.ChangeType, ch.BeforeHash = wire.Modified, new(p.Hash)
-				if f.Deferred {
+				switch {
+				case sess.Encrypted:
+				case f.Deferred:
 					ch.Additions, ch.Deletions = counts[f.Path].added, counts[f.Path].removed
-				} else if !f.Binary && !p.Binary {
+				case !f.Binary && !p.Binary:
 					ch.Additions, ch.Deletions = linediff.Count(priorBlobs[p.Hash].Content, f.Content)
 				}
+			case sess.Encrypted:
+				ch.Additions = f.Lines
 			case f.Deferred:
 				ch.Additions = counts[f.Path].added
 			case !f.Binary:
@@ -140,11 +155,15 @@ func (s *Service) IngestCheckpoint(ctx context.Context, id, token string, up *wi
 			files = append(files, wire.File{Path: e.Path, Hash: *e.Hash, Size: e.Size, Binary: e.Binary, Content: e.Content})
 		}
 	}
-	blobs := encodeFiles(files)
+	encrypted, err := s.Encrypted(ctx, id)
+	if err != nil {
+		return err
+	}
+	blobs := encodeFiles(files, encrypted)
 	now := s.now()
 
 	var cp *wire.Checkpoint
-	err := s.store.Tx(ctx, func(q *store.Queries) error {
+	err = s.store.Tx(ctx, func(q *store.Queries) error {
 		sess, err := s.lockForWrite(ctx, q, id, token)
 		if err != nil {
 			return err
@@ -156,7 +175,7 @@ func (s *Service) IngestCheckpoint(ctx context.Context, id, token string, up *wi
 		var needed []string
 		for _, e := range up.Entries {
 			p, ok := heads[e.Path]
-			if !ok || p.Binary {
+			if !ok || p.Binary || sess.Encrypted {
 				continue
 			}
 			if e.ChangeType == wire.Deleted || (*e.Hash != p.Hash && !e.Binary) {
@@ -174,7 +193,11 @@ func (s *Service) IngestCheckpoint(ctx context.Context, id, token string, up *wi
 			p, existed := heads[e.Path]
 			if e.ChangeType == wire.Deleted {
 				if existed { // deleting a file the server never had is a no-op
-					c.add(deletion(p, priorBlobs))
+					ch := deletion(p, priorBlobs)
+					if sess.Encrypted && !p.Binary {
+						ch.Deletions = e.Deletions
+					}
+					c.add(ch)
 					c.deletes = append(c.deletes, e.Path)
 				}
 				continue
@@ -186,11 +209,14 @@ func (s *Service) IngestCheckpoint(ctx context.Context, id, token string, up *wi
 			switch {
 			case existed:
 				ch.ChangeType, ch.BeforeHash = wire.Modified, new(p.Hash)
-				if !e.Binary && !p.Binary {
+				if !sess.Encrypted && !e.Binary && !p.Binary {
 					ch.Additions, ch.Deletions = linediff.Count(priorBlobs[p.Hash].Content, e.Content)
 				}
-			case !e.Binary:
+			case !e.Binary && !sess.Encrypted:
 				ch.Additions = linediff.Lines(e.Content)
+			}
+			if sess.Encrypted && !e.Binary {
+				ch.Additions, ch.Deletions = e.Additions, e.Deletions
 			}
 			c.add(ch)
 			c.upserts = append(c.upserts, store.HeadFile{Path: e.Path, Hash: *e.Hash, Size: e.Size, Binary: e.Binary})
@@ -270,7 +296,7 @@ func (s *Service) publishCheckpoint(ctx context.Context, cp *wire.Checkpoint) {
 
 // encodeFiles compresses each distinct content once, outside the
 // transaction.
-func encodeFiles(files []wire.File) []store.EncodedBlob {
+func encodeFiles(files []wire.File, encrypted bool) []store.EncodedBlob {
 	seen := make(map[string]bool, len(files))
 	in := make([]store.BlobInput, 0, len(files))
 	for _, f := range files {
@@ -278,7 +304,7 @@ func encodeFiles(files []wire.File) []store.EncodedBlob {
 			continue
 		}
 		seen[f.Hash] = true
-		in = append(in, store.BlobInput{Hash: f.Hash, Content: f.Content, Size: f.Size, Binary: f.Binary})
+		in = append(in, store.BlobInput{Hash: f.Hash, Content: f.Content, Size: f.Size, Binary: f.Binary, Raw: encrypted})
 	}
 	return store.EncodeBlobs(in)
 }

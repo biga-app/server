@@ -45,6 +45,7 @@ type Session struct {
 	UpdatedAt   string  `json:"updatedAt"`
 	EndedAt     *string `json:"endedAt"`
 	GroupID     *string `json:"groupId"`
+	Encrypted   bool    `json:"-"`
 }
 
 // SessionGrant answers PUT /api/sessions/:id. Token is the session's owner
@@ -70,6 +71,7 @@ type CreateSessionInput struct {
 	Title       *string `json:"title"`
 	Description *string `json:"description"`
 	GroupID     *string `json:"groupId"`
+	Encrypted   bool    `json:"-"`
 }
 
 // Node types in a snapshot tree.
@@ -91,6 +93,8 @@ type FileNode struct {
 	Binary   bool        `json:"binary"`
 	Children []*FileNode `json:"children"`
 	Ignored  bool        `json:"ignored"`
+	// Lines is reported by the client for an encrypted session.
+	Lines int `json:"-"`
 }
 
 // MarshalJSON writes the node in its discriminated-union shape, without
@@ -150,6 +154,10 @@ type CheckpointEntry struct {
 	Size       int64      `json:"size"`
 	Binary     bool       `json:"binary"`
 	Content    string     `json:"content"`
+	// Additions and Deletions are reported by the client for an encrypted
+	// session; for any other the server counts them.
+	Additions int `json:"-"`
+	Deletions int `json:"-"`
 }
 
 // CheckpointUpload is one save burst's worth of changes.
@@ -238,6 +246,8 @@ type FileContent struct {
 	Content string `json:"content"`
 	Binary  bool   `json:"binary"`
 	Hash    string `json:"hash"`
+	// Encrypted means Content is sealed and the viewer must open it.
+	Encrypted bool `json:"-"`
 }
 
 // Time formats t the way JavaScript's Date.toISOString does, which is what

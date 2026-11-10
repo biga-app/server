@@ -116,11 +116,13 @@ type File struct {
 	// Deferred marks a text file whose content was left out of a snapshot
 	// because it was uploaded ahead of it as a blob.
 	Deferred bool
+	// Lines is the line count an encrypted session's client reports.
+	Lines int
 }
 
 // ValidateBlobs checks content uploaded ahead of a snapshot: every hash must
 // be the SHA-256 of its content, and none may repeat.
-func ValidateBlobs(blobs []File, maxBlobs int, maxFileBytes int64) error {
+func ValidateBlobs(blobs []File, maxBlobs int, maxFileBytes int64, encrypted bool) error {
 	if len(blobs) == 0 {
 		return invalid("blobs", "must not be empty")
 	}
@@ -130,7 +132,7 @@ func ValidateBlobs(blobs []File, maxBlobs int, maxFileBytes int64) error {
 	seen := make(map[string]bool, len(blobs))
 	for i := range blobs {
 		b := &blobs[i]
-		f, err := checkFile("blobs", b.Hash, b.Hash, int64(len(b.Content)), false, b.Content, maxFileBytes)
+		f, err := checkFile("blobs", b.Hash, b.Hash, int64(len(b.Content)), false, b.Content, maxFileBytes, !encrypted)
 		if err != nil {
 			return err
 		}
@@ -160,6 +162,9 @@ func ValidateHashes(hashes []string, max int) error {
 type TreeLimits struct {
 	MaxFiles     int
 	MaxFileBytes int64
+	// Encrypted sessions hold sealed content, whose hash the server cannot
+	// check, and line counts the client reports.
+	Encrypted bool
 }
 
 // ValidateSnapshot checks an uploaded snapshot against the session it was
@@ -239,7 +244,7 @@ func (w *treeWalker) walk(n *FileNode, parent string, depth int) error {
 		return nil
 	case NodeFile:
 		n.Children, n.Ignored = nil, false
-		f, err := checkSnapshotFile(n, w.lim.MaxFileBytes)
+		f, err := checkSnapshotFile(n, w.lim.MaxFileBytes, w.lim.Encrypted)
 		if err != nil {
 			return err
 		}
@@ -273,9 +278,13 @@ func validName(name string) error {
 // checkSnapshotFile validates a snapshot's file. A text file that carries no
 // content is taken to have been uploaded as a blob already: only its hash is
 // checked here, and the ingest checks that the blob exists.
-func checkSnapshotFile(n *FileNode, maxBytes int64) (File, error) {
-	if n.Binary || n.Content != "" || n.Hash == HashOf("") {
-		return checkFile("tree", n.Path, n.Hash, n.Size, n.Binary, n.Content, maxBytes)
+func checkSnapshotFile(n *FileNode, maxBytes int64, encrypted bool) (File, error) {
+	if n.Binary || n.Content != "" || (!encrypted && n.Hash == HashOf("")) {
+		f, err := checkFile("tree", n.Path, n.Hash, n.Size, n.Binary, n.Content, maxBytes, !encrypted)
+		if encrypted {
+			f.Lines = clampCount(n.Lines)
+		}
+		return f, err
 	}
 	if !ValidHash(n.Hash) {
 		return File{}, invalid("tree", "file %q: hash must be 64 hex digits", n.Path)
@@ -283,13 +292,20 @@ func checkSnapshotFile(n *FileNode, maxBytes int64) (File, error) {
 	if n.Size < 0 {
 		return File{}, invalid("tree", "file %q: size is negative", n.Path)
 	}
-	return File{Path: n.Path, Hash: strings.ToLower(n.Hash), Size: min(n.Size, maxStoredValue), Deferred: true}, nil
+	f := File{Path: n.Path, Hash: strings.ToLower(n.Hash), Size: min(n.Size, maxStoredValue), Deferred: true}
+	if encrypted {
+		f.Lines = clampCount(n.Lines)
+	}
+	return f, nil
 }
+
+// clampCount keeps a client-reported line count within what is stored.
+func clampCount(n int) int { return min(max(n, 0), maxStoredValue) }
 
 // checkFile validates one file's identity and content. A text file's hash
 // must be the SHA-256 of its content: the server serves blobs by hash as
 // immutable, so a mismatched pair would poison every cache in front of it.
-func checkFile(field, path, hash string, size int64, binary bool, content string, maxBytes int64) (File, error) {
+func checkFile(field, path, hash string, size int64, binary bool, content string, maxBytes int64, verifyHash bool) (File, error) {
 	if !ValidHash(hash) {
 		return File{}, invalid(field, "file %q: hash must be 64 hex digits", path)
 	}
@@ -306,7 +322,7 @@ func checkFile(field, path, hash string, size int64, binary bool, content string
 	if int64(len(content)) > maxBytes {
 		return File{}, invalid(field, "file %q: content is larger than %d bytes", path, maxBytes)
 	}
-	if HashOf(content) != hash {
+	if verifyHash && HashOf(content) != hash {
 		return File{}, invalid(field, "file %q: hash does not match its content", path)
 	}
 	return File{Path: path, Hash: hash, Size: size, Content: content}, nil
@@ -314,7 +330,7 @@ func checkFile(field, path, hash string, size int64, binary bool, content string
 
 // ValidateCheckpoint checks a checkpoint upload against the session it was
 // sent to. It normalizes entries in place, as [ValidateSnapshot] does.
-func ValidateCheckpoint(u *CheckpointUpload, sessionID string, maxEntries int, maxFileBytes int64) error {
+func ValidateCheckpoint(u *CheckpointUpload, sessionID string, maxEntries int, maxFileBytes int64, encrypted bool) error {
 	if u.SessionID != sessionID {
 		return invalid("sessionId", "does not match the session in the URL")
 	}
@@ -345,6 +361,11 @@ func ValidateCheckpoint(u *CheckpointUpload, sessionID string, maxEntries int, m
 		if !e.ChangeType.Valid() {
 			return invalid("entries", "file %q: unknown change type %q", e.Path, e.ChangeType)
 		}
+		if encrypted {
+			e.Additions, e.Deletions = clampCount(e.Additions), clampCount(e.Deletions)
+		} else {
+			e.Additions, e.Deletions = 0, 0
+		}
 		if e.ChangeType == Deleted {
 			e.Hash, e.Content, e.Size, e.Binary = nil, "", 0, false
 			continue
@@ -352,7 +373,7 @@ func ValidateCheckpoint(u *CheckpointUpload, sessionID string, maxEntries int, m
 		if e.Hash == nil {
 			return invalid("entries", "file %q: hash is required", e.Path)
 		}
-		f, err := checkFile("entries", e.Path, *e.Hash, e.Size, e.Binary, e.Content, maxFileBytes)
+		f, err := checkFile("entries", e.Path, *e.Hash, e.Size, e.Binary, e.Content, maxFileBytes, !encrypted)
 		if err != nil {
 			return err
 		}

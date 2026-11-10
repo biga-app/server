@@ -35,7 +35,11 @@ func (s *Service) MissingBlobs(ctx context.Context, id, token string, hashes []s
 // StoreBlobs saves content ahead of the snapshot that will refer to it. It
 // counts against the session's storage quota like any other content.
 func (s *Service) StoreBlobs(ctx context.Context, id, token string, blobs []wire.File) error {
-	encoded := encodeFiles(blobs)
+	encrypted, err := s.Encrypted(ctx, id)
+	if err != nil {
+		return err
+	}
+	encoded := encodeFiles(blobs, encrypted)
 	return s.store.Tx(ctx, func(q *store.Queries) error {
 		if _, err := s.lockForWrite(ctx, q, id, token); err != nil {
 			return err

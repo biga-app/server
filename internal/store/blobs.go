@@ -11,6 +11,9 @@ type BlobInput struct {
 	Content string
 	Size    int64
 	Binary  bool
+	// Raw stores the content as it is. Sealed content is already random, so
+	// compressing it would only cost time.
+	Raw bool
 }
 
 // EncodedBlob is a blob compressed and ready to insert. Encode outside a
@@ -29,7 +32,11 @@ func EncodeBlobs(in []BlobInput) []EncodedBlob {
 	for i, b := range in {
 		data, codec := []byte{}, compressionNone
 		if !b.Binary {
-			data, codec = compress(b.Content)
+			if b.Raw {
+				data, codec = []byte(b.Content), compressionNone
+			} else {
+				data, codec = compress(b.Content)
+			}
 		}
 		out[i] = EncodedBlob{Hash: b.Hash, Data: data, Compression: codec, Size: int32(b.Size), Binary: b.Binary}
 	}

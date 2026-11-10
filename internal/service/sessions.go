@@ -24,6 +24,15 @@ func (s *Service) Session(ctx context.Context, id string) (wire.Session, error) 
 // before reading a request body, so an unauthorized client cannot make the
 // server decompress and parse megabytes; every write re-checks under the
 // session lock.
+// Encrypted reports whether a session holds sealed content.
+func (s *Service) Encrypted(ctx context.Context, id string) (bool, error) {
+	row, err := s.store.Q().Session(ctx, id)
+	if err != nil {
+		return false, sessionErr(err)
+	}
+	return row.Encrypted, nil
+}
+
 func (s *Service) Authorize(ctx context.Context, id, token string) error {
 	row, err := s.store.Q().Session(ctx, id)
 	if err != nil {
@@ -46,7 +55,7 @@ func (s *Service) PutSession(ctx context.Context, id, token string, in wire.Crea
 		if in.Title != nil {
 			title = *in.Title
 		}
-		row, ok, err := q.InsertSession(ctx, id, title, in.Description, in.GroupID, hash)
+		row, ok, err := q.InsertSession(ctx, id, title, in.Description, in.GroupID, hash, in.Encrypted)
 		if err != nil {
 			return fmt.Errorf("create session: %w", err)
 		}
@@ -61,6 +70,9 @@ func (s *Service) PutSession(ctx context.Context, id, token string, in wire.Crea
 		}
 		if err := checkOwner(existing, token); err != nil {
 			return err
+		}
+		if existing.Encrypted != in.Encrypted {
+			return ErrEncryptionMismatch
 		}
 		row, err = q.ReactivateSession(ctx, id, in.Title, in.Description, in.GroupID)
 		if err != nil {

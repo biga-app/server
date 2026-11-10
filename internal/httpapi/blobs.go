@@ -43,7 +43,12 @@ func (a *API) uploadBlobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	blobs := wire.BlobsFromPB(&req)
-	if err := wire.ValidateBlobs(blobs, a.limits.CheckpointEntries, a.limits.FileBytes); err != nil {
+	encrypted, err := a.svc.Encrypted(r.Context(), id)
+	if err != nil {
+		a.serviceError(w, r, err, "invalid_state", "")
+		return
+	}
+	if err := wire.ValidateBlobs(blobs, a.limits.CheckpointEntries, a.limits.FileBytes, encrypted); err != nil {
 		a.serviceError(w, r, err, "invalid_state", "")
 		return
 	}

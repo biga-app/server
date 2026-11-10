@@ -65,6 +65,7 @@ func SessionToPB(s Session) *bigav1.Session {
 		UpdatedAt:   s.UpdatedAt,
 		EndedAt:     s.EndedAt,
 		GroupId:     s.GroupID,
+		Encrypted:   s.Encrypted,
 	}
 }
 
@@ -80,7 +81,7 @@ func GrantToPB(g SessionGrant) *bigav1.SessionGrant {
 }
 
 func SessionInputFromPB(r *bigav1.PutSessionRequest) CreateSessionInput {
-	return CreateSessionInput{Title: r.Title, Description: r.Description, GroupID: r.GroupId}
+	return CreateSessionInput{Title: r.Title, Description: r.Description, GroupID: r.GroupId, Encrypted: r.GetEncrypted()}
 }
 
 func nodeToPB(n *FileNode, withContent bool) (*bigav1.FileNode, error) {
@@ -121,6 +122,7 @@ func nodeFromPB(n *bigav1.FileNode) *FileNode {
 		out.Type = NodeFile
 		out.Size, out.Hash, out.Binary = kind.File.GetSize(), kind.File.GetHash(), kind.File.GetBinary()
 		out.Content = string(kind.File.GetContent())
+		out.Lines = int(kind.File.GetLines())
 	case *bigav1.FileNode_Directory:
 		out.Type = NodeDirectory
 		out.Ignored = kind.Directory.GetIgnored()
@@ -166,6 +168,7 @@ func CheckpointUploadFromPB(u *bigav1.CheckpointUpload) CheckpointUpload {
 		out.Entries = append(out.Entries, CheckpointEntry{
 			Path: e.GetPath(), ChangeType: changeFromPB(e.GetChangeType()), OldPath: e.GetOldPath(),
 			Hash: e.Hash, Size: e.GetSize(), Binary: e.GetBinary(), Content: string(e.GetContent()),
+			Additions: int(e.GetAdditions()), Deletions: int(e.GetDeletions()),
 		})
 	}
 	return out
@@ -248,7 +251,7 @@ func StateToPB(s *SessionState) (*bigav1.SessionState, error) {
 }
 
 func FileContentToPB(f FileContent) *bigav1.FileContent {
-	return &bigav1.FileContent{Content: []byte(f.Content), Binary: f.Binary, Hash: f.Hash}
+	return &bigav1.FileContent{Content: []byte(f.Content), Binary: f.Binary, Hash: f.Hash, Encrypted: f.Encrypted}
 }
 
 func ExtensionToPB(e Extension) *bigav1.Extension {

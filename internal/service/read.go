@@ -182,7 +182,7 @@ func (s *Service) FileContent(ctx context.Context, id, path, ref string) (wire.F
 	if !ok {
 		return wire.FileContent{}, ErrNoVersion
 	}
-	return wire.FileContent{Content: b.Content, Binary: b.Binary, Hash: hash}, nil
+	return wire.FileContent{Content: b.Content, Binary: b.Binary, Hash: hash, Encrypted: sess.Encrypted}, nil
 }
 
 func versionErr(err error) error {

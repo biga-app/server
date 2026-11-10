@@ -21,14 +21,17 @@ type SessionRow struct {
 	// OwnerTokenHash is nil for sessions created before write protection.
 	OwnerTokenHash []byte
 	StorageBytes   int64
+	// Encrypted sessions hold content sealed by the client, which the server
+	// cannot read. It is fixed when the session is created.
+	Encrypted bool
 }
 
-const sessionColumns = `id, title, description, status, created_at, updated_at, ended_at, group_id, owner_token_hash, storage_bytes`
+const sessionColumns = `id, title, description, status, created_at, updated_at, ended_at, group_id, owner_token_hash, storage_bytes, encrypted`
 
 func scanSession(row pgx.Row) (SessionRow, error) {
 	var s SessionRow
 	err := row.Scan(&s.ID, &s.Title, &s.Description, &s.Status, &s.CreatedAt, &s.UpdatedAt,
-		&s.EndedAt, &s.GroupID, &s.OwnerTokenHash, &s.StorageBytes)
+		&s.EndedAt, &s.GroupID, &s.OwnerTokenHash, &s.StorageBytes, &s.Encrypted)
 	return s, notFound(err)
 }
 
@@ -46,12 +49,12 @@ func (q *Queries) LockSession(ctx context.Context, id string) (SessionRow, error
 
 // InsertSession creates a session, reporting false (and no error) if one
 // with the same ID already exists.
-func (q *Queries) InsertSession(ctx context.Context, id, title string, description, groupID *string, tokenHash []byte) (SessionRow, bool, error) {
+func (q *Queries) InsertSession(ctx context.Context, id, title string, description, groupID *string, tokenHash []byte, encrypted bool) (SessionRow, bool, error) {
 	s, err := scanSession(q.db.QueryRow(ctx, `
-		INSERT INTO sessions (id, title, description, status, group_id, owner_token_hash)
-		VALUES ($1, $2, $3, 'active', $4, $5)
+		INSERT INTO sessions (id, title, description, status, group_id, owner_token_hash, encrypted)
+		VALUES ($1, $2, $3, 'active', $4, $5, $6)
 		ON CONFLICT (id) DO NOTHING
-		RETURNING `+sessionColumns, id, title, description, groupID, tokenHash))
+		RETURNING `+sessionColumns, id, title, description, groupID, tokenHash, encrypted))
 	if errors.Is(err, ErrNotFound) {
 		return SessionRow{}, false, nil
 	}

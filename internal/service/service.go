@@ -29,6 +29,9 @@ var (
 	// prove they own it.
 	ErrLocked = errors.New("session predates owner tokens")
 	ErrQuota  = errors.New("session storage quota exceeded")
+	// ErrEncryptionMismatch means a request asked for a different kind of
+	// session, encrypted or not, than the one that exists.
+	ErrEncryptionMismatch = errors.New("a session cannot change between encrypted and not")
 )
 
 // MissingBlobsError means a snapshot refers to file content that was never
@@ -116,6 +119,7 @@ func (s *Service) view(r store.SessionRow) wire.Session {
 		UpdatedAt:   wire.Time(r.UpdatedAt),
 		EndedAt:     wire.TimePtr(r.EndedAt),
 		GroupID:     r.GroupID,
+		Encrypted:   r.Encrypted,
 	}
 	if s.stale(r) {
 		w.Status = wire.StatusEnded
