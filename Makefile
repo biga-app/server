@@ -7,7 +7,7 @@ endif
 # A scratch Postgres for `make test-db`; see `make db`.
 TEST_DATABASE_URL ?= postgres://postgres:test@127.0.0.1:55432/postgres?sslmode=disable
 
-.PHONY: build run test test-db db db-stop lint fmt tidy vuln image
+.PHONY: build run test test-db db db-stop lint fmt tidy vuln image proto
 
 build: ## Build ./biga-server
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o biga-server ./cmd/biga-server
@@ -26,6 +26,9 @@ db: ## Start a throwaway Postgres on 127.0.0.1:55432
 
 db-stop: ## Stop the throwaway Postgres
 	docker stop biga-server-test-db
+
+proto: ## Regenerate internal/wirepb from ../proto
+	buf generate
 
 lint: ## Run golangci-lint
 	golangci-lint run ./...

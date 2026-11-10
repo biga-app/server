@@ -17,7 +17,7 @@ func (a *API) serviceError(w http.ResponseWriter, r *http.Request, err error, in
 	switch {
 	case errors.As(err, &verr):
 		fail(w, r, http.StatusBadRequest, "invalid_request", "The request is invalid: "+verr.Error(),
-			map[string]any{"field": verr.Field, "reason": verr.Reason})
+			map[string]string{"field": verr.Field, "reason": verr.Reason})
 	case errors.Is(err, service.ErrNotFound):
 		fail(w, r, http.StatusNotFound, "not_found", "Session was not found.", nil)
 	case errors.Is(err, service.ErrNoVersion):
@@ -53,7 +53,7 @@ func bodyError(w http.ResponseWriter, r *http.Request, err error, what string) {
 	case errors.Is(err, errUnsupportedEncoding):
 		fail(w, r, http.StatusUnsupportedMediaType, "unsupported_encoding", "Unsupported Content-Encoding; send gzip or nothing.", nil)
 	case errors.Is(err, errUnsupportedType):
-		fail(w, r, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json.", nil)
+		fail(w, r, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/x-protobuf.", nil)
 	default:
 		fail(w, r, http.StatusBadRequest, "invalid_request", "Invalid "+lower(what)+" payload: "+err.Error(), nil)
 	}

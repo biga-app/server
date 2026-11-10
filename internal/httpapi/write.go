@@ -5,6 +5,7 @@ import (
 
 	"github.com/biga-app/server/internal/auth"
 	"github.com/biga-app/server/internal/wire"
+	bigav1 "github.com/biga-app/server/internal/wirepb/biga/v1"
 )
 
 // writeGate runs the checks every write shares, in order of cost: a
@@ -73,11 +74,12 @@ func (a *API) putSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var in wire.CreateSessionInput
-	if err := readJSON(w, r, a.limits.SessionBytes, &in, true); err != nil {
+	var req bigav1.PutSessionRequest
+	if err := readProto(w, r, a.limits.SessionBytes, &req, true); err != nil {
 		bodyError(w, r, err, "Session")
 		return
 	}
+	in := wire.SessionInputFromPB(&req)
 	if err := wire.ValidateSessionInput(&in); err != nil {
 		a.serviceError(w, r, err, "invalid_state", "")
 		return
@@ -91,7 +93,7 @@ func (a *API) putSession(w http.ResponseWriter, r *http.Request) {
 	if created {
 		status = http.StatusCreated
 	}
-	respondPrivate(w, r, status, grant)
+	respondPrivate(w, r, status, wire.GrantToPB(grant))
 }
 
 // endSession ends a session.
@@ -113,11 +115,12 @@ func (a *API) snapshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var snap wire.FileSnapshot
-	if err := readJSON(w, r, a.limits.SnapshotBytes, &snap, false); err != nil {
+	var msg bigav1.FileSnapshot
+	if err := readProto(w, r, a.limits.SnapshotBytes, &msg, false); err != nil {
 		bodyError(w, r, err, "Snapshot")
 		return
 	}
+	snap := wire.SnapshotFromPB(&msg)
 	files, err := wire.ValidateSnapshot(&snap, id, wire.TreeLimits{
 		MaxFiles: a.limits.SnapshotFiles, MaxFileBytes: a.limits.FileBytes,
 	})
@@ -129,7 +132,7 @@ func (a *API) snapshot(w http.ResponseWriter, r *http.Request) {
 		a.serviceError(w, r, err, "invalid_state", "")
 		return
 	}
-	respond(w, r, http.StatusAccepted, map[string]bool{"accepted": true})
+	accepted(w)
 }
 
 // checkpoint records one batch of changes.
@@ -138,11 +141,12 @@ func (a *API) checkpoint(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var up wire.CheckpointUpload
-	if err := readJSON(w, r, a.limits.CheckpointBytes, &up, false); err != nil {
+	var msg bigav1.CheckpointUpload
+	if err := readProto(w, r, a.limits.CheckpointBytes, &msg, false); err != nil {
 		bodyError(w, r, err, "Checkpoint")
 		return
 	}
+	up := wire.CheckpointUploadFromPB(&msg)
 	if err := wire.ValidateCheckpoint(&up, id, a.limits.CheckpointEntries, a.limits.FileBytes); err != nil {
 		a.serviceError(w, r, err, "invalid_state", "")
 		return
@@ -151,7 +155,7 @@ func (a *API) checkpoint(w http.ResponseWriter, r *http.Request) {
 		a.serviceError(w, r, err, "invalid_state", "")
 		return
 	}
-	respond(w, r, http.StatusAccepted, map[string]bool{"accepted": true})
+	accepted(w)
 }
 
 // heartbeat keeps a broadcast live.
@@ -179,5 +183,5 @@ func (a *API) manifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	respond(w, r, http.StatusOK, m)
+	respond(w, r, http.StatusOK, wire.ManifestToPB(m))
 }

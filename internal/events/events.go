@@ -6,26 +6,19 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"log/slog"
 	"sync"
+
+	"google.golang.org/protobuf/proto"
+
+	bigav1 "github.com/biga-app/server/internal/wirepb/biga/v1"
 )
 
-// Event is one server-sent event: Name is its SSE event name and Data its
-// JSON payload.
+// Event is one live-stream frame: Name says what it is, and Data is the
+// length-delimited StreamEvent exactly as it goes out to viewers.
 type Event struct {
 	Name string
 	Data []byte
-}
-
-// New encodes payload as an event. Payloads are the SSE event objects the
-// viewer parses, each with a "type" field equal to name.
-func New(name string, payload any) (Event, error) {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return Event{}, err
-	}
-	return Event{Name: name, Data: data}, nil
 }
 
 // bufferSize is how many events a viewer may fall behind before it is
@@ -113,7 +106,7 @@ func (h *Hub) Publish(ctx context.Context, sessionID string, e Event) {
 	if h.bridge == nil {
 		return
 	}
-	msg, err := json.Marshal(bridgeMessage{Instance: h.instance, SessionID: sessionID, Event: e.Data})
+	msg, err := proto.Marshal(&bigav1.BridgeMessage{InstanceId: h.instance, SessionId: sessionID, Name: e.Name, Frame: e.Data})
 	if err != nil {
 		h.log.Error("encode bridged event", "error", err)
 		return
@@ -154,28 +147,14 @@ func (h *Hub) Run(ctx context.Context) {
 		return
 	}
 	h.bridge.Run(ctx, func(raw []byte) {
-		var msg bridgeMessage
-		if err := json.Unmarshal(raw, &msg); err != nil || msg.SessionID == "" {
+		var msg bigav1.BridgeMessage
+		if err := proto.Unmarshal(raw, &msg); err != nil || msg.GetSessionId() == "" || msg.GetName() == "" {
 			h.log.Warn("ignoring malformed bridged event")
 			return
 		}
-		if msg.Instance == h.instance {
+		if msg.GetInstanceId() == h.instance {
 			return // already delivered locally
 		}
-		var head struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(msg.Event, &head); err != nil || head.Type == "" {
-			h.log.Warn("ignoring bridged event without a type")
-			return
-		}
-		h.deliver(msg.SessionID, Event{Name: head.Type, Data: msg.Event})
+		h.deliver(msg.GetSessionId(), Event{Name: msg.GetName(), Data: msg.GetFrame()})
 	})
-}
-
-// bridgeMessage is the cross-instance envelope.
-type bridgeMessage struct {
-	Instance  string          `json:"instanceId"`
-	SessionID string          `json:"sessionId"`
-	Event     json.RawMessage `json:"event"`
 }

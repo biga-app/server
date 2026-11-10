@@ -81,7 +81,13 @@ func (s *Service) readState(ctx context.Context, q *store.Queries, id string) (*
 
 func currentTree(snapshot []byte, heads []store.HeadFile) (json.RawMessage, error) {
 	if len(heads) > 0 {
-		return json.Marshal(treeFromHeads(heads))
+		var stored struct{ Name, Path string }
+		if err := json.Unmarshal(snapshot, &stored); err != nil {
+			return nil, err
+		}
+		tree := treeFromHeads(heads)
+		tree.Name, tree.Path = stored.Name, stored.Path
+		return json.Marshal(tree)
 	}
 	var root wire.FileNode
 	if err := json.Unmarshal(snapshot, &root); err != nil {

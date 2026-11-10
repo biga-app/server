@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/biga-app/server/internal/events"
 	"github.com/biga-app/server/internal/linediff"
 	"github.com/biga-app/server/internal/store"
 	"github.com/biga-app/server/internal/wire"
@@ -109,10 +110,8 @@ func (s *Service) IngestSnapshot(ctx context.Context, id, token string, snap *wi
 		return err
 	}
 
-	s.publish(ctx, id, "snapshot", struct {
-		Type    string            `json:"type"`
-		Payload wire.FileSnapshot `json:"payload"`
-	}{"snapshot", wire.FileSnapshot{SessionID: id, Tree: snap.Tree, Timestamp: now.UnixMilli(), SequenceNum: snap.SequenceNum}})
+	e, encodeErr := events.Snapshot(wire.FileSnapshot{SessionID: id, Tree: snap.Tree, Timestamp: now.UnixMilli(), SequenceNum: snap.SequenceNum})
+	s.publish(ctx, id, e, encodeErr)
 	if cp != nil {
 		s.publishCheckpoint(ctx, cp)
 	}
@@ -254,10 +253,8 @@ func (s *Service) storeBlobs(ctx context.Context, q *store.Queries, id string, b
 }
 
 func (s *Service) publishCheckpoint(ctx context.Context, cp *wire.Checkpoint) {
-	s.publish(ctx, cp.SessionID, "checkpoint", struct {
-		Type    string           `json:"type"`
-		Payload *wire.Checkpoint `json:"payload"`
-	}{"checkpoint", cp})
+	e, encodeErr := events.Checkpoint(cp)
+	s.publish(ctx, cp.SessionID, e, encodeErr)
 }
 
 // encodeFiles compresses each distinct content once, outside the

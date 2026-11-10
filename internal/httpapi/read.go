@@ -10,6 +10,7 @@ import (
 
 	"github.com/biga-app/server/internal/auth"
 	"github.com/biga-app/server/internal/wire"
+	bigav1 "github.com/biga-app/server/internal/wirepb/biga/v1"
 )
 
 // sessionID reads and validates the {id} path segment.
@@ -69,7 +70,7 @@ func (a *API) getSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	respond(w, r, http.StatusOK, s)
+	respond(w, r, http.StatusOK, wire.SessionToPB(s))
 }
 
 func (a *API) state(w http.ResponseWriter, r *http.Request) {
@@ -82,8 +83,13 @@ func (a *API) state(w http.ResponseWriter, r *http.Request) {
 		a.serviceError(w, r, err, "invalid_state", "")
 		return
 	}
+	msg, err := wire.StateToPB(st)
+	if err != nil {
+		a.serviceError(w, r, err, "invalid_state", "")
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	respond(w, r, http.StatusOK, st)
+	respond(w, r, http.StatusOK, msg)
 }
 
 func (a *API) checkpoints(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +107,7 @@ func (a *API) checkpoints(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	respond(w, r, http.StatusOK, map[string]any{"checkpoints": list})
+	respond(w, r, http.StatusOK, &bigav1.ListCheckpointsResponse{Checkpoints: wire.SummariesToPB(list)})
 }
 
 func (a *API) checkpointBySeq(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +127,7 @@ func (a *API) checkpointBySeq(w http.ResponseWriter, r *http.Request) {
 	}
 	// A checkpoint never changes once written.
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	respond(w, r, http.StatusOK, cp)
+	respond(w, r, http.StatusOK, wire.CheckpointToPB(cp))
 }
 
 func (a *API) file(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +159,7 @@ func (a *API) file(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Header().Set("Cache-Control", "no-store")
 	}
-	respond(w, r, http.StatusOK, fc)
+	respond(w, r, http.StatusOK, wire.FileContentToPB(fc))
 }
 
 func (a *API) fileHistory(w http.ResponseWriter, r *http.Request) {
@@ -175,7 +181,7 @@ func (a *API) fileHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	respond(w, r, http.StatusOK, map[string]any{"history": history})
+	respond(w, r, http.StatusOK, wire.HistoryToPB(history))
 }
 
 // cron runs the retention sweep for an external scheduler.
@@ -190,12 +196,12 @@ func (a *API) cron(w http.ResponseWriter, r *http.Request) {
 		a.serviceError(w, r, err, "invalid_state", "")
 		return
 	}
-	respond(w, r, http.StatusOK, res)
+	respondJSON(w, r, http.StatusOK, res)
 }
 
 func (a *API) healthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	respond(w, r, http.StatusOK, map[string]string{"status": "ok"})
+	respondJSON(w, r, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (a *API) readyz(w http.ResponseWriter, r *http.Request) {
@@ -209,5 +215,5 @@ func (a *API) readyz(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	respond(w, r, http.StatusOK, map[string]string{"status": "ready"})
+	respondJSON(w, r, http.StatusOK, map[string]string{"status": "ready"})
 }

@@ -29,7 +29,7 @@
 
 ---
 
-The [CLI](https://github.com/biga-app/cli) uploads a snapshot of a folder and then small checkpoints as files change. The server keeps them in PostgreSQL and pushes each change to viewers over server-sent events. Only the client that created a session can write to it; a link lets people watch, nothing more.
+The [CLI](https://github.com/biga-app/cli) uploads a snapshot of a folder and then small checkpoints as files change. The server keeps them in PostgreSQL and pushes each change to viewers over a live protobuf stream. Its messages are defined in the [proto](../proto) repository; run `make proto` to regenerate `internal/wirepb`. Only the client that created a session can write to it; a link lets people watch, nothing more.
 
 ## Get started
 

@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,12 +26,16 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protodelim"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/biga-app/server/internal/config"
 	"github.com/biga-app/server/internal/events"
 	"github.com/biga-app/server/internal/ratelimit"
 	"github.com/biga-app/server/internal/service"
 	"github.com/biga-app/server/internal/store"
 	"github.com/biga-app/server/internal/wire"
+	bigav1 "github.com/biga-app/server/internal/wirepb/biga/v1"
 )
 
 var (
@@ -88,8 +93,22 @@ type response struct {
 	body   []byte
 }
 
+func (r response) isProto() bool {
+	mt, _, _ := mime.ParseMediaType(r.header.Get("Content-Type"))
+	return mt == protoType
+}
+
 func (r response) data(t *testing.T, v any) {
 	t.Helper()
+	if msg, ok := v.(proto.Message); ok {
+		if !r.isProto() || r.status >= 300 {
+			t.Fatalf("not a protobuf success (%d %s): %s", r.status, r.header.Get("Content-Type"), r.body)
+		}
+		if err := proto.Unmarshal(r.body, msg); err != nil {
+			t.Fatalf("decode %T: %v", msg, err)
+		}
+		return
+	}
 	var env struct {
 		OK   bool            `json:"ok"`
 		Data json.RawMessage `json:"data"`
@@ -103,6 +122,11 @@ func (r response) data(t *testing.T, v any) {
 }
 
 func (r response) code() string {
+	if r.isProto() {
+		var e bigav1.Error
+		_ = proto.Unmarshal(r.body, &e)
+		return e.GetCode()
+	}
 	var env struct {
 		Error struct {
 			Code string `json:"code"`
@@ -114,7 +138,7 @@ func (r response) code() string {
 
 type req struct {
 	method, path string
-	body         any
+	body         proto.Message
 	raw          []byte
 	token, key   string
 	header       map[string]string
@@ -127,7 +151,7 @@ func (h *harness) do(q req) response {
 	case q.raw != nil:
 		body = bytes.NewReader(q.raw)
 	case q.body != nil:
-		b, err := json.Marshal(q.body)
+		b, err := proto.Marshal(q.body)
 		if err != nil {
 			h.t.Fatal(err)
 		}
@@ -137,8 +161,9 @@ func (h *harness) do(q req) response {
 	if err != nil {
 		h.t.Fatal(err)
 	}
+	r.Header.Set("Accept", protoType)
 	if body != nil {
-		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Content-Type", protoType)
 	}
 	if q.token != "" {
 		r.Header.Set("Authorization", "Bearer "+q.token)
@@ -174,44 +199,57 @@ func newSessionID(t *testing.T) string {
 	return "t" + hex.EncodeToString(b)
 }
 
+func putSession(title string) *bigav1.PutSessionRequest {
+	if title == "" {
+		return &bigav1.PutSessionRequest{}
+	}
+	return &bigav1.PutSessionRequest{Title: new(title)}
+}
+
 // create makes a session and returns its owner token.
 func (h *harness) create(id string) string {
 	h.t.Helper()
-	var grant wire.SessionGrant
-	h.expect(req{method: "PUT", path: "/api/sessions/" + id, body: map[string]string{"title": "demo"}}, 201, "").data(h.t, &grant)
-	if !strings.HasPrefix(grant.Token, "bgs_") {
-		h.t.Fatalf("create returned no owner token: %+v", grant)
+	var grant bigav1.SessionGrant
+	h.expect(req{method: "PUT", path: "/api/sessions/" + id, body: putSession("demo")}, 201, "").data(h.t, &grant)
+	if !strings.HasPrefix(grant.GetToken(), "bgs_") {
+		h.t.Fatalf("create returned no owner token: %+v", &grant)
 	}
-	return grant.Token
+	return grant.GetToken()
 }
 
-func file(name, content string) map[string]any {
-	return map[string]any{"type": "file", "name": name, "path": name, "size": len(content), "hash": wire.HashOf(content), "content": content}
+func fileNode(name, path, hash, content string) *bigav1.FileNode {
+	return &bigav1.FileNode{Name: name, Path: path, Kind: &bigav1.FileNode_File{File: &bigav1.FileInfo{
+		Size: int64(len(content)), Hash: hash, Content: []byte(content),
+	}}}
 }
 
-func snapshot(id string, files ...map[string]any) map[string]any {
-	children := make([]any, len(files))
-	for i, f := range files {
-		children[i] = f
-	}
-	return map[string]any{
-		"sessionId": id, "timestamp": time.Now().UnixMilli(), "sequenceNum": 0,
-		"tree": map[string]any{"type": "directory", "name": "proj", "path": ".", "children": children},
+func file(name, content string) *bigav1.FileNode {
+	return fileNode(name, name, wire.HashOf(content), content)
+}
+
+func snapshot(id string, files ...*bigav1.FileNode) *bigav1.FileSnapshot {
+	return &bigav1.FileSnapshot{
+		SessionId: id, Timestamp: time.Now().UnixMilli(),
+		Tree: &bigav1.FileNode{Name: "proj", Path: ".", Kind: &bigav1.FileNode_Directory{
+			Directory: &bigav1.DirectoryInfo{Children: files},
+		}},
 	}
 }
 
-func entry(path, change, content string) map[string]any {
-	e := map[string]any{"path": path, "changeType": change, "size": len(content)}
+func changeType(name string) bigav1.ChangeType {
+	return bigav1.ChangeType(bigav1.ChangeType_value["CHANGE_TYPE_"+strings.ToUpper(name)])
+}
+
+func entry(path, change, content string) *bigav1.CheckpointEntry {
+	e := &bigav1.CheckpointEntry{Path: path, ChangeType: changeType(change), Size: int64(len(content))}
 	if change != "deleted" {
-		e["hash"], e["content"] = wire.HashOf(content), content
-	} else {
-		e["hash"] = nil
+		e.Hash, e.Content = new(wire.HashOf(content)), []byte(content)
 	}
 	return e
 }
 
-func checkpoint(id string, entries ...map[string]any) map[string]any {
-	return map[string]any{"sessionId": id, "timestamp": time.Now().UnixMilli(), "entries": entries}
+func checkpoint(id string, entries ...*bigav1.CheckpointEntry) *bigav1.CheckpointUpload {
+	return &bigav1.CheckpointUpload{SessionId: id, Timestamp: time.Now().UnixMilli(), Entries: entries}
 }
 
 func TestOwnerTokenGuardsEveryWrite(t *testing.T) {
@@ -220,12 +258,12 @@ func TestOwnerTokenGuardsEveryWrite(t *testing.T) {
 	id := newSessionID(t)
 	base := "/api/sessions/" + id
 
-	var grant wire.SessionGrant
-	r := h.expect(req{method: "PUT", path: base, body: map[string]string{"title": "demo"}}, 201, "")
+	var grant bigav1.SessionGrant
+	r := h.expect(req{method: "PUT", path: base, body: putSession("demo")}, 201, "")
 	r.data(t, &grant)
-	token := grant.Token
-	if grant.ShareURL != "https://biga.example/session/"+id {
-		t.Errorf("shareUrl = %q", grant.ShareURL)
+	token := grant.GetToken()
+	if grant.GetShareUrl() != "https://biga.example/session/"+id {
+		t.Errorf("shareUrl = %q", grant.GetShareUrl())
 	}
 	if r.header.Get("Cache-Control") != "no-store" || r.header.Get("Content-Encoding") != "" {
 		t.Errorf("a response carrying a token must be uncached and uncompressed: %v", r.header)
@@ -233,8 +271,8 @@ func TestOwnerTokenGuardsEveryWrite(t *testing.T) {
 	other := h.create(newSessionID(t)) // a valid token for a different session
 
 	// Without the owner token, nobody can take the session over.
-	h.expect(req{method: "PUT", path: base, body: map[string]string{"title": "pwned"}}, 401, "unauthorized")
-	h.expect(req{method: "PUT", path: base, token: other, body: map[string]string{"title": "pwned"}}, 403, "forbidden")
+	h.expect(req{method: "PUT", path: base, body: putSession("pwned")}, 401, "unauthorized")
+	h.expect(req{method: "PUT", path: base, token: other, body: putSession("pwned")}, 403, "forbidden")
 	h.expect(req{method: "POST", path: base + "/snapshot", body: snapshot(id, file("a.txt", "evil\n"))}, 401, "unauthorized")
 	h.expect(req{method: "POST", path: base + "/snapshot", token: other, body: snapshot(id, file("a.txt", "evil\n"))}, 403, "forbidden")
 	h.expect(req{method: "POST", path: base + "/checkpoint", token: "bgs_guess", body: checkpoint(id, entry("a.txt", "added", "x"))}, 403, "forbidden")
@@ -243,53 +281,56 @@ func TestOwnerTokenGuardsEveryWrite(t *testing.T) {
 	h.expect(req{method: "DELETE", path: base}, 401, "unauthorized")
 
 	// The owner can do everything.
-	var again wire.SessionGrant
-	h.expect(req{method: "PUT", path: base, token: token, body: map[string]string{}}, 200, "").data(t, &again)
-	if again.Token != "" || again.Title != "demo" {
-		t.Errorf("reactivation leaked a token or lost the title: %+v", again)
+	var again bigav1.SessionGrant
+	h.expect(req{method: "PUT", path: base, token: token, body: putSession("")}, 200, "").data(t, &again)
+	if again.GetToken() != "" || again.GetSession().GetTitle() != "demo" {
+		t.Errorf("reactivation leaked a token or lost the title: %+v", &again)
 	}
 	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("a.txt", "one\ntwo\n"), file("b.txt", "keep\n"))}, 202, "")
 	h.expect(req{method: "POST", path: base + "/checkpoint", token: token, body: checkpoint(id, entry("a.txt", "modified", "one\n2\nthree\n"))}, 202, "")
 	h.expect(req{method: "POST", path: base + "/heartbeat", token: token}, 204, "")
 
-	var m wire.Manifest
+	var m bigav1.Manifest
 	h.expect(req{method: "GET", path: base + "/manifest", token: token}, 200, "").data(t, &m)
-	if len(m.Files) != 2 {
-		t.Errorf("manifest = %+v", m)
+	if len(m.GetFiles()) != 2 {
+		t.Errorf("manifest = %+v", &m)
 	}
 
 	// Viewers read without credentials.
-	var st wire.SessionState
+	var st bigav1.SessionState
 	h.expect(req{method: "GET", path: base + "/state"}, 200, "").data(t, &st)
-	if st.Mode != wire.ModeEager || len(st.Checkpoints) != 2 || st.Snapshot == nil {
-		t.Fatalf("state = %+v", st)
+	if st.GetMode() != bigav1.LoadMode_LOAD_MODE_EAGER || len(st.GetCheckpoints()) != 2 || st.GetSnapshot() == nil {
+		t.Fatalf("state = %+v", &st)
 	}
-	latest := st.Checkpoints[0]
-	if latest.Seq != 1 || latest.Label != "Updated a.txt" || latest.Additions != 2 || latest.Deletions != 1 {
+	if root := st.GetSnapshot().GetTree(); root.GetName() != "proj" || root.GetPath() != "." || len(root.GetDirectory().GetChildren()) != 2 {
+		t.Errorf("the tree root keeps the broadcast's name and path: %+v", root)
+	}
+	latest := st.GetCheckpoints()[0]
+	if latest.GetSeq() != 1 || latest.GetLabel() != "Updated a.txt" || latest.GetAdditions() != 2 || latest.GetDeletions() != 1 {
 		t.Errorf("latest checkpoint = %+v", latest)
 	}
-	if st.Checkpoints[1].Label != "Initial snapshot" || st.Checkpoints[1].Additions != 3 {
-		t.Errorf("initial checkpoint = %+v", st.Checkpoints[1])
+	if first := st.GetCheckpoints()[1]; first.GetLabel() != "Initial snapshot" || first.GetAdditions() != 3 {
+		t.Errorf("initial checkpoint = %+v", first)
 	}
 
-	var fc wire.FileContent
+	var fc bigav1.FileContent
 	h.expect(req{method: "GET", path: base + "/file?path=a.txt"}, 200, "").data(t, &fc)
-	if fc.Content != "one\n2\nthree\n" {
-		t.Errorf("latest content = %q", fc.Content)
+	if string(fc.GetContent()) != "one\n2\nthree\n" {
+		t.Errorf("latest content = %q", fc.GetContent())
 	}
 	h.expect(req{method: "GET", path: base + "/file?path=a.txt&ref=0"}, 200, "").data(t, &fc)
-	if fc.Content != "one\ntwo\n" {
-		t.Errorf("content at seq 0 = %q", fc.Content)
+	if string(fc.GetContent()) != "one\ntwo\n" {
+		t.Errorf("content at seq 0 = %q", fc.GetContent())
 	}
 	r = h.expect(req{method: "GET", path: base + "/file?path=a.txt&ref=" + wire.HashOf("one\ntwo\n")}, 200, "")
 	if !strings.Contains(r.header.Get("Cache-Control"), "immutable") {
 		t.Errorf("hash refs should be immutable: %q", r.header.Get("Cache-Control"))
 	}
 
-	var cp wire.Checkpoint
+	var cp bigav1.Checkpoint
 	h.expect(req{method: "GET", path: base + "/checkpoints/1"}, 200, "").data(t, &cp)
-	if len(cp.Changes) != 1 || cp.Changes[0].BeforeHash == nil || *cp.Changes[0].BeforeHash != wire.HashOf("one\ntwo\n") {
-		t.Errorf("checkpoint 1 = %+v", cp)
+	if len(cp.GetChanges()) != 1 || cp.GetChanges()[0].GetBeforeHash() != wire.HashOf("one\ntwo\n") {
+		t.Errorf("checkpoint 1 = %+v", &cp)
 	}
 
 	// Ending is the owner's call, and only once.
@@ -308,20 +349,16 @@ func TestRejoinSnapshotRecordsDeletions(t *testing.T) {
 	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("a.txt", "a\n"), file("gone.txt", "1\n2\n"))}, 202, "")
 	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("a.txt", "a\n"))}, 202, "")
 
-	var list struct {
-		Checkpoints []wire.CheckpointSummary `json:"checkpoints"`
-	}
+	var list bigav1.ListCheckpointsResponse
 	h.expect(req{method: "GET", path: base + "/checkpoints?limit=10"}, 200, "").data(t, &list)
-	if len(list.Checkpoints) != 2 || list.Checkpoints[0].Label != "Resumed session" || list.Checkpoints[0].Deletions != 2 {
-		t.Fatalf("checkpoints = %+v", list.Checkpoints)
+	if got := list.GetCheckpoints(); len(got) != 2 || got[0].GetLabel() != "Resumed session" || got[0].GetDeletions() != 2 {
+		t.Fatalf("checkpoints = %+v", &list)
 	}
 	h.expect(req{method: "GET", path: base + "/file?path=gone.txt"}, 404, "not_found")
-	var history struct {
-		History []wire.FileHistoryEntry `json:"history"`
-	}
+	var history bigav1.FileHistoryResponse
 	h.expect(req{method: "GET", path: base + "/file/history?path=gone.txt"}, 200, "").data(t, &history)
-	if len(history.History) != 2 || history.History[0].ChangeType != wire.Deleted {
-		t.Errorf("history = %+v", history.History)
+	if got := history.GetHistory(); len(got) != 2 || got[0].GetChangeType() != bigav1.ChangeType_CHANGE_TYPE_DELETED {
+		t.Errorf("history = %+v", &history)
 	}
 }
 
@@ -334,17 +371,14 @@ func TestStateAfterDeletingLastFile(t *testing.T) {
 	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("a.txt", "hello"))}, 202, "")
 	h.expect(req{method: "POST", path: base + "/checkpoint", token: token, body: checkpoint(id, entry("a.txt", "deleted", ""))}, 202, "")
 
-	var state wire.SessionState
+	var state bigav1.SessionState
 	h.expect(req{method: "GET", path: base + "/state"}, 200, "").data(t, &state)
-	var tree wire.FileNode
-	if state.Snapshot == nil {
+	if state.GetSnapshot() == nil {
 		t.Fatal("state has no snapshot")
 	}
-	if err := json.Unmarshal(state.Snapshot.Tree, &tree); err != nil {
-		t.Fatal(err)
-	}
-	if tree.Type != wire.NodeDirectory || len(tree.Children) != 0 || len(state.Contents) != 0 {
-		t.Fatalf("expected an empty tree and no contents, got tree %s and %v", state.Snapshot.Tree, state.Contents)
+	tree := state.GetSnapshot().GetTree()
+	if tree.GetDirectory() == nil || len(tree.GetDirectory().GetChildren()) != 0 || len(state.GetContents()) != 0 {
+		t.Fatalf("expected an empty tree and no contents, got tree %+v and %v", tree, state.GetContents())
 	}
 }
 
@@ -358,8 +392,8 @@ func TestSessionsWithoutATokenAreReadOnly(t *testing.T) {
 	}
 	base := "/api/sessions/" + id
 	h.expect(req{method: "GET", path: base}, 200, "")
-	h.expect(req{method: "PUT", path: base, body: map[string]string{}}, 403, "session_locked")
-	h.expect(req{method: "PUT", path: base, token: "bgs_anything", body: map[string]string{}}, 403, "session_locked")
+	h.expect(req{method: "PUT", path: base, body: putSession("")}, 403, "session_locked")
+	h.expect(req{method: "PUT", path: base, token: "bgs_anything", body: putSession("")}, 403, "session_locked")
 	h.expect(req{method: "POST", path: base + "/snapshot", token: "bgs_anything", body: snapshot(id, file("a", "x"))}, 403, "session_locked")
 	h.expect(req{method: "DELETE", path: base}, 403, "session_locked")
 }
@@ -372,10 +406,10 @@ func TestRejectsMalformedUploads(t *testing.T) {
 	base := "/api/sessions/" + id
 
 	forged := file("a.txt", "real\n")
-	forged["content"] = "something else\n"
+	forged.GetFile().Content = []byte("something else\n")
 	traversal := entry("../../etc/passwd", "added", "x")
 	nul := entry("a\x00b", "added", "x")
-	nested := map[string]any{"type": "file", "name": "x", "path": "elsewhere/x", "size": 1, "hash": wire.HashOf("y"), "content": "y"}
+	nested := fileNode("x", "elsewhere/x", wire.HashOf("y"), "y")
 
 	for name, q := range map[string]req{
 		"hash that does not match content": {method: "POST", path: base + "/snapshot", body: snapshot(id, forged)},
@@ -384,10 +418,10 @@ func TestRejectsMalformedUploads(t *testing.T) {
 		"sessionId of another session":     {method: "POST", path: base + "/snapshot", body: snapshot("someoneelse", file("a", "1"))},
 		"path traversal":                   {method: "POST", path: base + "/checkpoint", body: checkpoint(id, traversal)},
 		"NUL byte in a path":               {method: "POST", path: base + "/checkpoint", body: checkpoint(id, nul)},
-		"unknown change type":              {method: "POST", path: base + "/checkpoint", body: checkpoint(id, map[string]any{"path": "a", "changeType": "exploded", "size": 0})},
+		"unknown change type":              {method: "POST", path: base + "/checkpoint", body: checkpoint(id, &bigav1.CheckpointEntry{Path: "a"})},
 		"empty checkpoint":                 {method: "POST", path: base + "/checkpoint", body: checkpoint(id)},
-		"not JSON":                         {method: "POST", path: base + "/checkpoint", raw: []byte("{nope")},
-		"title with control characters":    {method: "PUT", path: base, body: map[string]string{"title": "a\x1b[31mb"}},
+		"not protobuf":                     {method: "POST", path: base + "/checkpoint", raw: []byte{0xff, 0xff, 0xff, 0xff}},
+		"title with control characters":    {method: "PUT", path: base, body: putSession("a\x1b[31mb")},
 	} {
 		q.token = token
 		r := h.do(q)
@@ -401,20 +435,54 @@ func TestRejectsMalformedUploads(t *testing.T) {
 	h.expect(req{method: "GET", path: base + "/checkpoints?limit=-1"}, 400, "invalid_request")
 
 	// Size limits apply to the decoded body, so a gzip bomb is refused.
+	bombMsg, err := proto.Marshal(checkpoint(id, &bigav1.CheckpointEntry{
+		Path: "a", ChangeType: bigav1.ChangeType_CHANGE_TYPE_ADDED, Content: bytes.Repeat([]byte("A"), 1<<20),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var bomb bytes.Buffer
 	zw := gzip.NewWriter(&bomb)
-	_, _ = zw.Write([]byte(`{"sessionId":"` + id + `","timestamp":1,"entries":[{"path":"a","changeType":"added","size":1,"content":"`))
-	_, _ = zw.Write(bytes.Repeat([]byte("A"), 1<<20))
+	_, _ = zw.Write(bombMsg)
 	_ = zw.Close()
 	h.expect(req{method: "POST", path: base + "/checkpoint", token: token, raw: bomb.Bytes(), header: map[string]string{"Content-Encoding": "gzip"}}, 413, "payload_too_large")
-	h.expect(req{method: "POST", path: base + "/checkpoint", token: token, raw: []byte("{}"), header: map[string]string{"Content-Encoding": "br"}}, 415, "unsupported_encoding")
+	h.expect(req{method: "POST", path: base + "/checkpoint", token: token, raw: []byte("x"), header: map[string]string{"Content-Encoding": "br"}}, 415, "unsupported_encoding")
 	h.expect(req{method: "POST", path: base + "/checkpoint", token: token, raw: []byte("a=b"), header: map[string]string{"Content-Type": "application/x-www-form-urlencoded"}}, 415, "unsupported_media_type")
+	h.expect(req{method: "POST", path: base + "/checkpoint", token: token, raw: []byte("{}"), header: map[string]string{"Content-Type": "application/json"}}, 415, "unsupported_media_type")
+
+	// Messages nested beyond the decoder's depth are refused, not recursed into.
+	deep := &bigav1.FileNode{Name: "d", Path: "d", Kind: &bigav1.FileNode_Directory{Directory: &bigav1.DirectoryInfo{}}}
+	for range maxMessageDepth + 50 {
+		deep = &bigav1.FileNode{Name: "d", Path: "d", Kind: &bigav1.FileNode_Directory{Directory: &bigav1.DirectoryInfo{Children: []*bigav1.FileNode{deep}}}}
+	}
+	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, deep)}, 400, "invalid_request")
 
 	// Nothing above was stored.
-	var st wire.SessionState
+	var st bigav1.SessionState
 	h.expect(req{method: "GET", path: base + "/state"}, 200, "").data(t, &st)
-	if st.Snapshot != nil || len(st.Checkpoints) != 0 {
-		t.Errorf("rejected uploads left data behind: %+v", st)
+	if st.GetSnapshot() != nil || len(st.GetCheckpoints()) != 0 {
+		t.Errorf("rejected uploads left data behind: %+v", &st)
+	}
+}
+
+func TestClientsThatDoNotSpeakProtobufGetAReadableError(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	id := newSessionID(t)
+	base := "/api/sessions/" + id
+
+	for _, q := range []req{
+		{method: "PUT", path: base, raw: []byte(`{"title":"x"}`), header: map[string]string{"Accept": "application/json", "Content-Type": "application/json"}},
+		{method: "GET", path: base + "/state", header: map[string]string{"Accept": "application/json"}},
+		{method: "GET", path: base + "/state", header: map[string]string{"Accept": "*/*"}},
+	} {
+		r := h.do(q)
+		var env struct {
+			Error struct{ Code, Message string } `json:"error"`
+		}
+		if err := json.Unmarshal(r.body, &env); err != nil || r.status != http.StatusNotAcceptable || env.Error.Code != "not_acceptable" || !strings.Contains(env.Error.Message, "protobuf") {
+			t.Errorf("%s %v: got %d %s", q.method, q.header, r.status, r.body)
+		}
 	}
 }
 
@@ -425,13 +493,13 @@ func TestAccessKeyGatesWrites(t *testing.T) {
 	id := newSessionID(t)
 	base := "/api/sessions/" + id
 
-	h.expect(req{method: "PUT", path: base, body: map[string]string{}}, 401, "access_key_required")
-	h.expect(req{method: "PUT", path: base, key: key + "x", body: map[string]string{}}, 401, "access_key_invalid")
-	var grant wire.SessionGrant
-	h.expect(req{method: "PUT", path: base, key: key, body: map[string]string{}}, 201, "").data(t, &grant)
+	h.expect(req{method: "PUT", path: base, body: putSession("")}, 401, "access_key_required")
+	h.expect(req{method: "PUT", path: base, key: key + "x", body: putSession("")}, 401, "access_key_invalid")
+	var grant bigav1.SessionGrant
+	h.expect(req{method: "PUT", path: base, key: key, body: putSession("")}, 201, "").data(t, &grant)
 	// Even the owner needs the key, so revoking a key stops its broadcasts.
-	h.expect(req{method: "POST", path: base + "/heartbeat", token: grant.Token}, 401, "access_key_required")
-	h.expect(req{method: "POST", path: base + "/heartbeat", token: grant.Token, key: key}, 204, "")
+	h.expect(req{method: "POST", path: base + "/heartbeat", token: grant.GetToken()}, 401, "access_key_required")
+	h.expect(req{method: "POST", path: base + "/heartbeat", token: grant.GetToken(), key: key}, 204, "")
 	// Viewers never need one.
 	h.expect(req{method: "GET", path: base + "/state"}, 200, "")
 }
@@ -462,9 +530,9 @@ func TestStorageQuota(t *testing.T) {
 	big := make([]byte, 3000)
 	_, _ = rand.Read(big) // incompressible
 	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("big.txt", hex.EncodeToString(big)))}, 413, "storage_quota_exceeded")
-	var st wire.SessionState
+	var st bigav1.SessionState
 	h.expect(req{method: "GET", path: base + "/state"}, 200, "").data(t, &st)
-	if st.Snapshot != nil {
+	if st.GetSnapshot() != nil {
 		t.Error("a snapshot over quota was stored")
 	}
 	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("small.txt", "ok\n"))}, 202, "")
@@ -508,52 +576,68 @@ func TestStreamDeliversLiveEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	r, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.srv.URL+base+"/stream", nil)
+	r.Header.Set("Accept", streamType)
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+	if ct := resp.Header.Get("Content-Type"); ct != streamType {
 		t.Fatalf("content type %q", ct)
 	}
-	events := make(chan string, 16)
+	frames := make(chan *bigav1.StreamEvent, 16)
 	go func() {
-		s := bufio.NewScanner(resp.Body)
-		for s.Scan() {
-			if name, ok := strings.CutPrefix(s.Text(), "event: "); ok {
-				events <- name
+		defer close(frames)
+		in := bufio.NewReader(resp.Body)
+		for {
+			var ev bigav1.StreamEvent
+			if err := protodelim.UnmarshalFrom(in, &ev); err != nil {
+				return
 			}
+			frames <- &ev
 		}
-		close(events)
 	}()
-	next := func(want string) {
+	next := func() *bigav1.StreamEvent {
 		t.Helper()
 		select {
-		case got := <-events:
-			if got != want {
-				t.Fatalf("event %q, want %q", got, want)
+		case ev, ok := <-frames:
+			if !ok {
+				t.Fatal("the stream closed early")
 			}
+			return ev
 		case <-ctx.Done():
-			t.Fatalf("timed out waiting for %q", want)
+			t.Fatal("timed out waiting for a frame")
 		}
+		return nil
 	}
 
-	next("connected")
+	if ev := next(); ev.GetConnected().GetSessionId() != id {
+		t.Fatalf("first frame = %+v", ev)
+	}
 	h.expect(req{method: "POST", path: base + "/checkpoint", token: token, body: checkpoint(id, entry("a.txt", "modified", "2\n"))}, 202, "")
-	next("checkpoint")
+	ev := next()
+	if cp := ev.GetCheckpoint(); cp.GetSummary().GetSeq() != 1 || len(cp.GetChanges()) != 1 || cp.GetChanges()[0].GetPath() != "a.txt" {
+		t.Fatalf("checkpoint frame = %+v", ev)
+	}
 	h.expect(req{method: "DELETE", path: base, token: token}, 204, "")
-	next("session_ended")
-	if _, open := <-events; open {
+	if ev := next(); ev.GetSessionEnded().GetSessionId() != id {
+		t.Fatalf("last frame = %+v", ev)
+	}
+	if _, open := <-frames; open {
 		t.Error("the stream should close after session_ended")
 	}
 }
 
-func TestUnknownRoutesAnswerJSON(t *testing.T) {
+func TestUnknownRoutesAndOpsEndpointsAnswerJSON(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, nil)
-	h.expect(req{method: "GET", path: "/api/nope"}, 404, "not_found")
-	h.expect(req{method: "GET", path: "/readyz"}, 200, "")
-	h.expect(req{method: "GET", path: "/api/cron/cleanup"}, 404, "not_found") // disabled without a secret
+	json := map[string]string{"Accept": "application/json"}
+	h.expect(req{method: "GET", path: "/api/nope", header: json}, 404, "not_found")
+	r := h.expect(req{method: "GET", path: "/readyz", header: json}, 200, "")
+	if ct := r.header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("readyz content type = %q", ct)
+	}
+	h.expect(req{method: "GET", path: "/api/cron/cleanup", header: json}, 404, "not_found") // disabled without a secret
 }
 
 func TestResponsesAreCompressedForGzipClients(t *testing.T) {
@@ -562,9 +646,10 @@ func TestResponsesAreCompressedForGzipClients(t *testing.T) {
 	id := newSessionID(t)
 	token := h.create(id)
 	base := "/api/sessions/" + id
-	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("a.txt", strings.Repeat("hello world\n", 500)))}, 202, "")
+	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("a.txt", strings.Repeat("hello world, again and again\n", 500)))}, 202, "")
 
 	r, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, h.srv.URL+base+"/state", nil)
+	r.Header.Set("Accept", protoType)
 	r.Header.Set("Accept-Encoding", "gzip")
 	resp, err := (&http.Transport{DisableCompression: true}).RoundTrip(r)
 	if err != nil {
@@ -578,8 +663,12 @@ func TestResponsesAreCompressedForGzipClients(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var env map[string]any
-	if err := json.NewDecoder(zr).Decode(&env); err != nil || env["ok"] != true {
-		t.Fatalf("decoded = %v, %v", env, err)
+	plain, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st bigav1.SessionState
+	if err := proto.Unmarshal(plain, &st); err != nil || st.GetSession().GetId() != id || len(st.GetContents()) != 1 {
+		t.Fatalf("decoded = %+v, %v", &st, err)
 	}
 }

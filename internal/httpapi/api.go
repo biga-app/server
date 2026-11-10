@@ -110,10 +110,10 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (a *API) routes() {
 	m := a.mux
 	read := func(h http.HandlerFunc) http.HandlerFunc {
-		return deadlines(readTimeout, writeTimeout, a.cors(a.readLimit(h)))
+		return deadlines(readTimeout, writeTimeout, a.cors(a.readLimit(negotiate(h))))
 	}
 	write := func(timeout time.Duration, h http.HandlerFunc) http.HandlerFunc {
-		return deadlines(timeout, timeout+time.Minute, h)
+		return deadlines(timeout, timeout+time.Minute, negotiate(h))
 	}
 
 	// Written by the CLI.
@@ -136,11 +136,11 @@ func (a *API) routes() {
 	m.HandleFunc("GET /api/sessions/{id}/checkpoints/{seq}", read(a.checkpointBySeq))
 	m.HandleFunc("GET /api/sessions/{id}/file", read(a.file))
 	m.HandleFunc("GET /api/sessions/{id}/file/history", read(a.fileHistory))
-	m.HandleFunc("GET /api/sessions/{id}/stream", a.cors(a.readLimit(a.stream)))
+	m.HandleFunc("GET /api/sessions/{id}/stream", a.cors(a.readLimit(negotiate(a.stream))))
 	m.HandleFunc("OPTIONS /api/sessions/{path...}", a.cors(a.preflight))
 
 	if a.cronSecret != "" {
-		m.HandleFunc("GET /api/cron/cleanup", write(writeTimeout, a.cron))
+		m.HandleFunc("GET /api/cron/cleanup", deadlines(writeTimeout, writeTimeout+time.Minute, a.cron))
 	}
 	m.HandleFunc("GET /healthz", a.healthz)
 	m.HandleFunc("GET /readyz", a.readyz)

@@ -1,12 +1,11 @@
 package httpapi
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/biga-app/server/internal/events"
 	"github.com/biga-app/server/internal/wire"
 )
 
@@ -53,7 +52,7 @@ func (g *streamGate) release(client string) {
 	}
 }
 
-// stream sends a session's live events as server-sent events.
+// stream sends a session's live events as length-delimited protobuf frames.
 func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 	id, ok := sessionID(w, r)
 	if !ok {
@@ -88,7 +87,7 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 	// ReadHeaderTimeout, and each write below carries its own deadline.
 	_ = rc.SetReadDeadline(time.Time{})
 	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
+	h.Set("Content-Type", streamType)
 	h.Set("Cache-Control", "no-cache, no-transform")
 	h.Set("X-Accel-Buffering", "no") // nginx: do not buffer
 	w.WriteHeader(http.StatusOK)
@@ -100,16 +99,11 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 		}
 		return rc.Flush() == nil
 	}
-	event := func(name string, data []byte) bool {
-		return send(fmt.Appendf(nil, "event: %s\ndata: %s\n\n", name, data))
-	}
-	ended := func() bool {
-		data, _ := json.Marshal(map[string]any{"type": "session_ended", "sessionId": id, "timestamp": time.Now().UnixMilli()})
-		return event("session_ended", data)
+	frame := func(e events.Event, err error) bool {
+		return err == nil && send(e.Data)
 	}
 
-	connected, _ := json.Marshal(map[string]any{"type": "connected", "sessionId": id, "timestamp": time.Now().UnixMilli()})
-	if !event("connected", connected) || sess.Status != wire.StatusActive {
+	if !frame(events.Connected(id, time.Now())) || sess.Status != wire.StatusActive {
 		return
 	}
 
@@ -125,7 +119,7 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return // fell too far behind; the browser reconnects and resyncs
 			}
-			if !event(e.Name, e.Data) || e.Name == "session_ended" {
+			if !send(e.Data) || e.Name == events.NameSessionEnded {
 				return
 			}
 		case <-tick.C:
@@ -135,10 +129,10 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if stale {
-				ended()
+				frame(events.SessionEnded(id, time.Now()))
 				return
 			}
-			if !send(fmt.Appendf(nil, ": keepalive %d\n\n", time.Now().UnixMilli())) {
+			if !frame(events.Keepalive(time.Now())) {
 				return
 			}
 		}

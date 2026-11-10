@@ -95,11 +95,8 @@ func (s *Service) EndSession(ctx context.Context, id, token string) error {
 	if err != nil {
 		return err
 	}
-	s.publish(ctx, id, "session_ended", struct {
-		Type      string `json:"type"`
-		SessionID string `json:"sessionId"`
-		Timestamp int64  `json:"timestamp"`
-	}{"session_ended", id, s.now().UnixMilli()})
+	e, encodeErr := events.SessionEnded(id, s.now())
+	s.publish(ctx, id, e, encodeErr)
 	return nil
 }
 
@@ -158,10 +155,9 @@ func (s *Service) Stale(ctx context.Context, id string) (bool, error) {
 
 // publish sends an event to a session's viewers. Failures are logged:
 // the write it reports has already committed.
-func (s *Service) publish(ctx context.Context, sessionID, name string, payload any) {
-	e, err := events.New(name, payload)
-	if err != nil {
-		s.log.Error("encode event", "event", name, "error", err)
+func (s *Service) publish(ctx context.Context, sessionID string, e events.Event, encodeErr error) {
+	if encodeErr != nil {
+		s.log.Error("encode event", "event", e.Name, "error", encodeErr)
 		return
 	}
 	s.events.Publish(ctx, sessionID, e)

@@ -10,6 +10,7 @@ import (
 	"github.com/biga-app/server/internal/auth"
 	"github.com/biga-app/server/internal/service"
 	"github.com/biga-app/server/internal/wire"
+	bigav1 "github.com/biga-app/server/internal/wirepb/biga/v1"
 )
 
 func (a *API) createExtension(w http.ResponseWriter, r *http.Request) {
@@ -17,14 +18,12 @@ func (a *API) createExtension(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var in struct {
-		Name string `json:"name"`
-	}
-	if err := readJSON(w, r, 1024, &in, true); err != nil {
+	var in bigav1.CreateExtensionRequest
+	if err := readProto(w, r, 1024, &in, true); err != nil {
 		bodyError(w, r, err, "Extension")
 		return
 	}
-	name := strings.TrimSpace(in.Name)
+	name := strings.TrimSpace(in.GetName())
 	if name == "" || len(name) > 80 || strings.ContainsRune(name, 0) {
 		fail(w, r, http.StatusBadRequest, "invalid_request", "Extension name must be between 1 and 80 bytes and contain no NUL characters.", nil)
 		return
@@ -38,7 +37,7 @@ func (a *API) createExtension(w http.ResponseWriter, r *http.Request) {
 		a.serviceError(w, r, err, "invalid_state", "")
 		return
 	}
-	respondPrivate(w, r, http.StatusCreated, grant)
+	respondPrivate(w, r, http.StatusCreated, wire.ExtensionGrantToPB(grant))
 }
 
 func (a *API) listExtensions(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +50,7 @@ func (a *API) listExtensions(w http.ResponseWriter, r *http.Request) {
 		a.serviceError(w, r, err, "invalid_state", "")
 		return
 	}
-	respondPrivate(w, r, http.StatusOK, map[string][]wire.Extension{"extensions": extensions})
+	respondPrivate(w, r, http.StatusOK, wire.ExtensionsToPB(extensions))
 }
 
 func (a *API) revokeExtension(w http.ResponseWriter, r *http.Request) {
@@ -98,5 +97,5 @@ func (a *API) extensionEvents(w http.ResponseWriter, r *http.Request) {
 		a.serviceError(w, r, err, "invalid_state", "")
 		return
 	}
-	respondPrivate(w, r, http.StatusOK, feed)
+	respondJSONPrivate(w, r, http.StatusOK, feed)
 }

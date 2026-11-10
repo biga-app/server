@@ -1,32 +1,41 @@
 package httpapi
 
 import (
-	"bytes"
 	"compress/gzip"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"strings"
+
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	protoType  = "application/x-protobuf"
+	streamType = "application/vnd.biga.stream+protobuf"
+
+	// maxMessageDepth bounds how deeply a request's messages may nest, well
+	// above the snapshot tree depth the validator allows.
+	maxMessageDepth = 300
 )
 
 var (
 	errTooLarge            = errors.New("request body is too large")
 	errUnsupportedEncoding = errors.New("unsupported Content-Encoding")
-	errUnsupportedType     = errors.New("Content-Type must be application/json")
-	errMalformed           = errors.New("request body is not valid JSON")
+	errUnsupportedType     = errors.New("Content-Type must be application/x-protobuf")
+	errMalformed           = errors.New("request body is not valid protobuf")
 )
 
-// readJSON decodes a request body into v, enforcing max on the decoded
+// readProto decodes a request body into msg, enforcing max on the decoded
 // bytes: a small gzip body cannot expand past the limit, and a missing or
 // lying Content-Length cannot smuggle a larger one through. An empty body
-// leaves v untouched when allowEmpty is set.
-func readJSON(w http.ResponseWriter, r *http.Request, max int64, v any, allowEmpty bool) error {
+// leaves msg untouched when allowEmpty is set.
+func readProto(w http.ResponseWriter, r *http.Request, max int64, msg proto.Message, allowEmpty bool) error {
 	if r.ContentLength > 0 || r.Header.Get("Content-Type") != "" {
 		mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil || mt != "application/json" {
+		if err != nil || mt != protoType {
 			return errUnsupportedType
 		}
 	}
@@ -55,18 +64,14 @@ func readJSON(w http.ResponseWriter, r *http.Request, max int64, v any, allowEmp
 	if int64(len(data)) > max {
 		return errTooLarge
 	}
-	if len(bytes.TrimSpace(data)) == 0 {
+	if len(data) == 0 {
 		if allowEmpty {
 			return nil
 		}
 		return errMalformed
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("%w: %s", errMalformed, jsonProblem(err))
-	}
-	if dec.More() {
-		return fmt.Errorf("%w: trailing data after the JSON value", errMalformed)
+	if err := (proto.UnmarshalOptions{RecursionLimit: maxMessageDepth}).Unmarshal(data, msg); err != nil {
+		return fmt.Errorf("%w: %s", errMalformed, protoProblem(err))
 	}
 	return nil
 }
@@ -78,16 +83,10 @@ func bodyErr(err error) error {
 	return fmt.Errorf("%w: the body is truncated or corrupt", errMalformed)
 }
 
-// jsonProblem describes a decode error without echoing the input.
-func jsonProblem(err error) string {
-	var syn *json.SyntaxError
-	var typ *json.UnmarshalTypeError
-	switch {
-	case errors.As(err, &syn):
-		return fmt.Sprintf("syntax error at byte %d", syn.Offset)
-	case errors.As(err, &typ):
-		return fmt.Sprintf("field %q has the wrong type", typ.Field)
-	default:
-		return "malformed"
+// protoProblem describes a decode error without echoing the input.
+func protoProblem(err error) string {
+	if strings.Contains(err.Error(), "exceeded maximum recursion depth") {
+		return "messages are nested too deeply"
 	}
+	return "malformed"
 }
