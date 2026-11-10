@@ -27,7 +27,9 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/biga-server /usr/local/bin/biga-server
 USER nonroot:nonroot
 ENV BIGA_LISTEN=:8080
-EXPOSE 8080
+EXPOSE 8080/tcp
+# HTTP/3, when the server terminates TLS itself.
+EXPOSE 8080/udp
 # distroless has no curl; the binary probes itself.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=3 \
   CMD ["/usr/local/bin/biga-server", "healthcheck"]

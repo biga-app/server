@@ -39,7 +39,10 @@ func (s *Service) StoreBlobs(ctx context.Context, id, token string, blobs []wire
 	if err != nil {
 		return err
 	}
-	encoded := encodeFiles(blobs, encrypted)
+	encoded, err := s.stageBlobs(ctx, id, token, encodeFiles(blobs, encrypted))
+	if err != nil {
+		return err
+	}
 	return s.store.Tx(ctx, func(q *store.Queries) error {
 		if _, err := s.lockForWrite(ctx, q, id, token); err != nil {
 			return err

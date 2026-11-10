@@ -110,31 +110,35 @@ func (q *Queries) MarkAbandoned(ctx context.Context, cutoff time.Time) (int64, e
 	return tag.RowsAffected(), err
 }
 
-// DeleteExpired deletes sessions that ended before cutoff, in batches so
-// no single statement holds locks for long. Foreign keys cascade to every
-// row the session owns. Protected sessions are excluded inside the
-// selection, so they can never stall a batch.
-func (q *Queries) DeleteExpired(ctx context.Context, cutoff time.Time, protected []string, batch int) (int64, error) {
+// ExpiredSessionIDs lists sessions that ended before cutoff, up to limit.
+// Protected sessions are excluded in the selection, so they can never stall a
+// batch.
+func (q *Queries) ExpiredSessionIDs(ctx context.Context, cutoff time.Time, protected []string, limit int) ([]string, error) {
 	if protected == nil {
 		protected = []string{}
 	}
-	var total int64
-	for {
-		tag, err := q.db.Exec(ctx, `
-			DELETE FROM sessions WHERE id IN (
-				SELECT id FROM sessions
-				WHERE status = 'ended' AND ended_at < $1 AND NOT (id = ANY($2))
-				LIMIT $3
-			)`, cutoff, protected, batch)
-		if err != nil {
-			return total, err
-		}
-		total += tag.RowsAffected()
-		if tag.RowsAffected() < int64(batch) {
-			return total, nil
-		}
-		if err := ctx.Err(); err != nil {
-			return total, err
-		}
+	rows, err := q.db.Query(ctx, `
+		SELECT id FROM sessions
+		WHERE status = 'ended' AND ended_at < $1 AND NOT (id = ANY($2))
+		ORDER BY ended_at
+		LIMIT $3`, cutoff, protected, limit)
+	if err != nil {
+		return nil, err
 	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// DeleteSessions deletes sessions. Foreign keys cascade to every row they own.
+func (q *Queries) DeleteSessions(ctx context.Context, ids []string) (int64, error) {
+	tag, err := q.db.Exec(ctx, `DELETE FROM sessions WHERE id = ANY($1)`, ids)
+	return tag.RowsAffected(), err
 }

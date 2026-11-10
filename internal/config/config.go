@@ -35,6 +35,14 @@ type Config struct {
 	TLSCertFile string
 	TLSKeyFile  string
 
+	// HTTP3 serves QUIC on the same port as TLS, over UDP. It has no effect
+	// without TLS.
+	HTTP3 bool
+
+	// S3 holds file content in S3-compatible object storage instead of
+	// Postgres when its Endpoint or Bucket is set.
+	S3 S3
+
 	// PublicURL is the origin viewers open, used to build share links. Empty
 	// leaves link building to the CLI.
 	PublicURL string
@@ -104,6 +112,25 @@ type Limits struct {
 	StreamsPerClient int
 }
 
+// S3 locates an S3-compatible bucket.
+type S3 struct {
+	// Endpoint is host[:port] of the service. AWS S3 is s3.amazonaws.com.
+	Endpoint string
+	Bucket   string
+	Region   string
+	// AccessKey and SecretKey may both be empty to use the environment's
+	// AWS credentials or an instance role.
+	AccessKey string
+	SecretKey string
+	// Insecure talks to the service over plain HTTP.
+	Insecure bool
+	// CreateBucket makes the bucket at start-up when it does not exist.
+	CreateBucket bool
+}
+
+// Enabled reports whether object storage is configured.
+func (s S3) Enabled() bool { return s.Bucket != "" }
+
 // TLS reports whether the server terminates TLS itself.
 func (c Config) TLS() bool { return c.TLSCertFile != "" }
 
@@ -118,7 +145,18 @@ func Load(getenv func(string) string) (Config, error) {
 		TLSKeyFile:     e.get("BIGA_TLS_KEY_FILE"),
 		CronSecret:     e.secret("BIGA_CRON_SECRET"),
 		MigrateOnStart: e.boolean("BIGA_MIGRATE_ON_START", true),
-		LogFormat:      cmp.Or(strings.ToLower(e.get("BIGA_LOG_FORMAT")), "json"),
+		HTTP3:          e.boolean("BIGA_HTTP3", true),
+		S3: S3{
+			Endpoint:  e.get("BIGA_S3_ENDPOINT"),
+			Bucket:    e.get("BIGA_S3_BUCKET"),
+			Region:    e.get("BIGA_S3_REGION"),
+			AccessKey: e.secret("BIGA_S3_ACCESS_KEY"),
+			SecretKey: e.secret("BIGA_S3_SECRET_KEY"),
+			Insecure:  e.boolean("BIGA_S3_INSECURE", false),
+
+			CreateBucket: e.boolean("BIGA_S3_CREATE_BUCKET", false),
+		},
+		LogFormat: cmp.Or(strings.ToLower(e.get("BIGA_LOG_FORMAT")), "json"),
 		Limits: Limits{
 			SnapshotBytes:       e.int64("MAX_SNAPSHOT_BYTES", 32<<20),
 			CheckpointBytes:     e.int64("MAX_CHECKPOINT_BYTES", 8<<20),
@@ -175,6 +213,12 @@ func Load(getenv func(string) string) (Config, error) {
 		e.fail("BIGA_TLS_CERT_FILE", errors.New("and BIGA_TLS_KEY_FILE must be set together"))
 	case c.LogFormat != "json" && c.LogFormat != "text":
 		e.fail("BIGA_LOG_FORMAT", fmt.Errorf("%q is not json or text", c.LogFormat))
+	}
+	if c.S3.Enabled() && c.S3.Endpoint == "" {
+		e.fail("BIGA_S3_ENDPOINT", errors.New("is required when BIGA_S3_BUCKET is set"))
+	}
+	if (c.S3.AccessKey == "") != (c.S3.SecretKey == "") {
+		e.fail("BIGA_S3_ACCESS_KEY", errors.New("and BIGA_S3_SECRET_KEY must be set together"))
 	}
 	if len(c.Listen) == 0 {
 		e.fail("BIGA_LISTEN", errors.New("has no addresses"))

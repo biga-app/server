@@ -17,6 +17,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/biga-app/server/internal/objstore"
 )
 
 // ErrNotFound reports that a row does not exist.
@@ -25,12 +27,23 @@ var ErrNotFound = errors.New("not found")
 // Store is a pool of Postgres connections.
 type Store struct {
 	pool *pgxpool.Pool
+	// objects holds blob content outside the database when set.
+	objects objstore.Store
+}
+
+// Option adjusts a [Store].
+type Option func(*Store)
+
+// WithObjects keeps new blob content in an object store instead of Postgres.
+// Blobs already in Postgres stay readable.
+func WithObjects(objects objstore.Store) Option {
+	return func(s *Store) { s.objects = objects }
 }
 
 // Open connects to databaseURL, waiting for the database to accept
 // connections until ctx is done, which covers a database container that is
 // still starting.
-func Open(ctx context.Context, databaseURL string, log *slog.Logger) (*Store, error) {
+func Open(ctx context.Context, databaseURL string, log *slog.Logger, opts ...Option) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		// pgx redacts the password from its parse errors.
@@ -53,7 +66,11 @@ func Open(ctx context.Context, databaseURL string, log *slog.Logger) (*Store, er
 		err = pool.Ping(pingCtx)
 		cancel()
 		if err == nil {
-			return &Store{pool: pool}, nil
+			s := &Store{pool: pool}
+			for _, opt := range opts {
+				opt(s)
+			}
+			return s, nil
 		}
 		log.Warn("waiting for Postgres", "attempt", attempt, "error", err)
 		select {
@@ -72,7 +89,7 @@ func (s *Store) Close() { s.pool.Close() }
 func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
 // Q runs queries outside a transaction.
-func (s *Store) Q() *Queries { return &Queries{db: s.pool} }
+func (s *Store) Q() *Queries { return &Queries{db: s.pool, objects: s.objects} }
 
 // Tx runs fn in a transaction, committing when it returns nil and rolling
 // back otherwise.
@@ -90,7 +107,7 @@ func (s *Store) transact(ctx context.Context, opts pgx.TxOptions, fn func(*Queri
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }() // no-op after commit
-	if err := fn(&Queries{db: tx}); err != nil {
+	if err := fn(&Queries{db: tx, objects: s.objects}); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -133,7 +150,8 @@ type dbtx interface {
 
 // Queries runs statements on the pool or inside one transaction.
 type Queries struct {
-	db dbtx
+	db      dbtx
+	objects objstore.Store
 }
 
 func notFound(err error) error {

@@ -57,10 +57,21 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test (including the API against Postgres)
+      - name: Start an S3-compatible store
+        run: |
+          docker run -d --name s3 -p 127.0.0.1:8333:8333 chrislusf/seaweedfs:latest server -dir=/data -s3
+          for _ in $(seq 1 60); do
+            docker exec s3 wget -q --spider http://127.0.0.1:9333/cluster/status && exit 0
+            sleep 1
+          done
+          docker logs s3
+          exit 1
+
+      - name: Test (including the API against Postgres and the object store)
         run: go test -race -count=1 -timeout=10m ./...
         env:
           BIGA_TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/postgres?sslmode=disable
+          BIGA_TEST_S3: localhost:8333,biga-ci,ci,ci
 
   lint:
     name: Lint

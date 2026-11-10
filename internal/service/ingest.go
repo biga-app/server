@@ -26,7 +26,10 @@ func (s *Service) IngestSnapshot(ctx context.Context, id, token string, snap *wi
 	if err != nil {
 		return err
 	}
-	blobs := encodeFiles(files, encrypted)
+	blobs, err := s.stageBlobs(ctx, id, token, encodeFiles(files, encrypted))
+	if err != nil {
+		return err
+	}
 	now := s.now()
 
 	var cp *wire.Checkpoint
@@ -159,7 +162,10 @@ func (s *Service) IngestCheckpoint(ctx context.Context, id, token string, up *wi
 	if err != nil {
 		return err
 	}
-	blobs := encodeFiles(files, encrypted)
+	blobs, err := s.stageBlobs(ctx, id, token, encodeFiles(files, encrypted))
+	if err != nil {
+		return err
+	}
 	now := s.now()
 
 	var cp *wire.Checkpoint
@@ -269,6 +275,42 @@ func (s *Service) lockForWrite(ctx context.Context, q *store.Queries, id, token 
 	return sess, nil
 }
 
+// stageBlobs moves new content into the object store, when there is one, and
+// records it as unreferenced before the transaction that will refer to it, so
+// no database lock is held across the network. What comes back is what still
+// has to be stored with that transaction. The caller must own the session
+// before anything is written.
+func (s *Service) stageBlobs(ctx context.Context, id, token string, blobs []store.EncodedBlob) ([]store.EncodedBlob, error) {
+	if !s.store.UsesObjects() || len(blobs) == 0 {
+		return blobs, nil
+	}
+	if err := s.Authorize(ctx, id, token); err != nil {
+		return nil, err
+	}
+	put, err := s.store.PutObjects(ctx, id, blobs)
+	if err != nil {
+		return nil, err
+	}
+	var remote, local []store.EncodedBlob
+	for _, b := range put {
+		if b.Remote {
+			remote = append(remote, b)
+		} else {
+			local = append(local, b)
+		}
+	}
+	if len(remote) == 0 {
+		return local, nil
+	}
+	err = s.store.Tx(ctx, func(q *store.Queries) error {
+		if _, err := s.lockForWrite(ctx, q, id, token); err != nil {
+			return err
+		}
+		return s.storeBlobs(ctx, q, id, remote)
+	})
+	return local, err
+}
+
 // storeBlobs inserts new blobs and enforces the session's storage quota.
 // Exceeding it fails the whole transaction.
 func (s *Service) storeBlobs(ctx context.Context, q *store.Queries, id string, blobs []store.EncodedBlob) error {
@@ -345,6 +387,13 @@ func (c *changeSet) commit(ctx context.Context, q *store.Queries, id string, seq
 		return nil, err
 	}
 	if err := q.DeleteHeads(ctx, id, c.deletes); err != nil {
+		return nil, err
+	}
+	hashes := make([]string, len(c.upserts))
+	for i, h := range c.upserts {
+		hashes[i] = h.Hash
+	}
+	if err := q.AttachBlobs(ctx, id, hashes); err != nil {
 		return nil, err
 	}
 	return &wire.Checkpoint{

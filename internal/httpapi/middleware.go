@@ -96,6 +96,7 @@ func (a *API) base(next http.Handler) http.Handler {
 			a.log.Log(ctx, level, "request",
 				"request_id", id,
 				"method", r.Method,
+				"proto", r.Proto,
 				"path", r.URL.Path,
 				"status", rec.status,
 				"bytes", rec.bytes,

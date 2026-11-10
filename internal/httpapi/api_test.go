@@ -33,6 +33,7 @@ import (
 
 	"github.com/biga-app/server/internal/config"
 	"github.com/biga-app/server/internal/events"
+	"github.com/biga-app/server/internal/objstore"
 	"github.com/biga-app/server/internal/ratelimit"
 	"github.com/biga-app/server/internal/service"
 	"github.com/biga-app/server/internal/store"
@@ -50,17 +51,51 @@ type harness struct {
 	t   *testing.T
 	srv *httptest.Server
 	st  *store.Store
+	svc *service.Service
+	dsn string
 }
 
-func newHarness(t *testing.T, env map[string]string) *harness {
+// setup adjusts what newHarness builds.
+type setup struct {
+	dsn     string
+	store   []store.Option
+	service func(*service.Options)
+}
+
+type harnessOption func(*setup)
+
+func withObjects(objects objstore.Store) harnessOption {
+	return func(s *setup) { s.store = append(s.store, store.WithObjects(objects)) }
+}
+
+// withDatabase points the test at another database, for tests that run the
+// retention sweep, which looks at every session there is.
+func withDatabase(dsn string) harnessOption { return func(s *setup) { s.dsn = dsn } }
+
+func withService(fn func(*service.Options)) harnessOption {
+	return func(s *setup) { s.service = fn }
+}
+
+func newHarness(t *testing.T, env map[string]string, options ...harnessOption) *harness {
 	t.Helper()
 	dsn := os.Getenv("BIGA_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("BIGA_TEST_DATABASE_URL is not set")
 	}
-	migrateOnce.Do(func() { migrateErr = store.Migrate(context.Background(), dsn, quiet) })
-	if migrateErr != nil {
-		t.Fatalf("migrate: %v", migrateErr)
+	cfgSetup := setup{dsn: dsn}
+	for _, o := range options {
+		o(&cfgSetup)
+	}
+	dsn = cfgSetup.dsn
+	if dsn != os.Getenv("BIGA_TEST_DATABASE_URL") {
+		if err := store.Migrate(t.Context(), dsn, quiet); err != nil {
+			t.Fatalf("migrate scratch database: %v", err)
+		}
+	} else {
+		migrateOnce.Do(func() { migrateErr = store.Migrate(context.Background(), dsn, quiet) })
+		if migrateErr != nil {
+			t.Fatalf("migrate: %v", migrateErr)
+		}
 	}
 	vars := map[string]string{"DATABASE_URL": dsn, "BIGA_PUBLIC_URL": "https://biga.example"}
 	maps.Copy(vars, env)
@@ -68,13 +103,13 @@ func newHarness(t *testing.T, env map[string]string) *harness {
 	if err != nil {
 		t.Fatalf("config: %v", err)
 	}
-	st, err := store.Open(t.Context(), dsn, quiet)
+	st, err := store.Open(t.Context(), dsn, quiet, cfgSetup.store...)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(st.Close)
 	hub := events.NewHub(nil, quiet)
-	svc := service.New(st, hub, service.Options{
+	svcOpts := service.Options{
 		SessionStale:   cfg.SessionStale,
 		EagerMaxBytes:  cfg.EagerMaxBytes,
 		EagerMaxFiles:  cfg.EagerMaxFiles,
@@ -86,12 +121,16 @@ func newHarness(t *testing.T, env map[string]string) *harness {
 			MaxFileBytes:      cfg.Limits.FileBytes,
 			MaxBlobBatchBytes: cfg.Limits.CheckpointBytes,
 		},
-	}, quiet)
+	}
+	if cfgSetup.service != nil {
+		cfgSetup.service(&svcOpts)
+	}
+	svc := service.New(st, hub, svcOpts, quiet)
 	done := make(chan struct{})
 	api := New(Options{Service: svc, Events: hub, Config: cfg, Limiter: ratelimit.NewMemory(), Log: quiet, Done: done, Ready: st.Ping})
 	srv := httptest.NewServer(api)
 	t.Cleanup(func() { close(done); srv.Close() })
-	return &harness{t: t, srv: srv, st: st}
+	return &harness{t: t, srv: srv, st: st, svc: svc, dsn: dsn}
 }
 
 type response struct {

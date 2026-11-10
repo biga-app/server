@@ -59,6 +59,9 @@ type Options struct {
 	Retention    time.Duration
 	AbandonAfter time.Duration
 	Protected    []string
+	// OrphanAfter is how long uploaded content may go unreferenced by any
+	// snapshot or checkpoint before the sweep removes it. Zero means a day.
+	OrphanAfter time.Duration
 	// BlobCacheBytes bounds the in-process content cache.
 	BlobCacheBytes int64
 	// Limits is reported to clients that create a session.

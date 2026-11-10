@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,7 +25,9 @@ import (
 	"github.com/biga-app/server/internal/auth"
 	"github.com/biga-app/server/internal/config"
 	"github.com/biga-app/server/internal/events"
+	"github.com/biga-app/server/internal/h3server"
 	"github.com/biga-app/server/internal/httpapi"
+	"github.com/biga-app/server/internal/objstore"
 	"github.com/biga-app/server/internal/ratelimit"
 	"github.com/biga-app/server/internal/service"
 	"github.com/biga-app/server/internal/store"
@@ -38,6 +41,7 @@ Usage:
   biga-server [serve]      Serve the API (the default)
   biga-server migrate      Apply database migrations and exit
   biga-server cleanup      Run the retention sweep once and exit
+  biga-server blobs migrate  Move stored file content into object storage
   biga-server healthcheck  Exit 0 if the local server answers /healthz
   biga-server gen-key      Print a new access key for BIGA_ACCESS_KEYS
   biga-server version      Print the version
@@ -67,6 +71,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		})
 	case "cleanup":
 		err = withConfig(func(cfg config.Config, log *slog.Logger) error { return cleanup(ctx, cfg, log, stdout) })
+	case "blobs":
+		err = withConfig(func(cfg config.Config, log *slog.Logger) error { return blobs(ctx, cfg, log, args, stdout) })
 	case "healthcheck":
 		err = healthcheck(ctx, args)
 	case "gen-key":
@@ -101,9 +107,7 @@ func withConfig(fn func(config.Config, *slog.Logger) error) error {
 
 func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	log.Info("starting biga-server", "version", version.String())
-	openCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	st, err := store.Open(openCtx, cfg.DatabaseURL, log)
-	cancel()
+	st, err := openStore(ctx, cfg, log, 90*time.Second)
 	if err != nil {
 		return err
 	}
@@ -164,6 +168,9 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			if err := st.Ping(ctx); err != nil {
 				return fmt.Errorf("postgres: %w", err)
 			}
+			if err := st.PingObjects(ctx); err != nil {
+				return fmt.Errorf("object storage: %w", err)
+			}
 			if rdb != nil {
 				if err := rdb.Ping(ctx).Err(); err != nil {
 					return fmt.Errorf("redis: %w", err)
@@ -178,21 +185,46 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	bg.Go(func() { hub.Run(bgCtx) })
 	bg.Go(func() { svc.RunCleanup(bgCtx, cfg.CleanupInterval) })
 
-	var tlsConfig *tls.Config
+	var (
+		tlsConfig *tls.Config
+		cert      tls.Certificate
+	)
 	if cfg.TLS() {
 		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		if cert, err = tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
+			stopBackground()
+			return fmt.Errorf("load TLS certificate: %w", err)
+		}
 	}
 	errLog := slog.NewLogLogger(log.Handler(), slog.LevelWarn)
 	servers := make([]*http.Server, 0, len(cfg.Listen))
-	errs := make(chan error, len(cfg.Listen))
+	var quicServers []*h3server.Server
+	errs := make(chan error, 2*len(cfg.Listen))
 	for _, addr := range cfg.Listen {
 		ln, err := listen(ctx, addr)
 		if err != nil {
 			stopBackground()
 			return err
 		}
+		var handler http.Handler = api
+		if quicNetwork, quicAddr, port, ok := quicAddress(cfg, addr, ln); ok {
+			h3, err := h3server.Listen(ctx, quicNetwork, quicAddr, cert, api, log)
+			if err != nil {
+				stopBackground()
+				return err
+			}
+			quicServers = append(quicServers, h3)
+			handler = h3server.AltSvc(api, port)
+			go func() {
+				if err := h3.Serve(); err != nil && !errors.Is(err, net.ErrClosed) {
+					errs <- fmt.Errorf("serve http/3 %s: %w", quicAddr, err)
+				}
+			}()
+			log.Info("listening", "address", h3.Addr().String(), "protocol", "http/3")
+		}
 		srv := &http.Server{
-			Handler:           api,
+			Handler:           handler,
+			Protocols:         protocols(cfg),
 			ReadHeaderTimeout: 10 * time.Second,
 			IdleTimeout:       120 * time.Second,
 			MaxHeaderBytes:    64 << 10,
@@ -235,9 +267,54 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			log.Warn("forced shutdown", "error", err)
 		}
 	}
+	for _, h3 := range quicServers {
+		if err := h3.Shutdown(shutdownCtx); err != nil {
+			log.Warn("forced shutdown", "error", err)
+		}
+	}
 	stopBackground()
 	bg.Wait()
 	return serveErr
+}
+
+// protocols is what each TCP listener speaks: HTTP/1.1 and HTTP/2 over TLS,
+// and, without TLS, HTTP/1.1 plus HTTP/2 in cleartext (h2c), which is how a
+// reverse proxy in front reaches the server with one connection for many
+// requests and no head-of-line blocking between streams.
+func protocols(cfg config.Config) *http.Protocols {
+	var p http.Protocols
+	p.SetHTTP1(true)
+	if cfg.TLS() {
+		p.SetHTTP2(true)
+	} else {
+		p.SetUnencryptedHTTP2(true)
+	}
+	return &p
+}
+
+// quicAddress says whether addr also gets an HTTP/3 listener, and where. Only
+// TCP addresses do, and only when the server terminates TLS itself.
+func quicAddress(cfg config.Config, addr string, ln net.Listener) (network, address string, port int, ok bool) {
+	if !cfg.TLS() || !cfg.HTTP3 {
+		return "", "", 0, false
+	}
+	tcp, isTCP := ln.Addr().(*net.TCPAddr)
+	if !isTCP {
+		return "", "", 0, false
+	}
+	network = "udp"
+	switch {
+	case strings.HasPrefix(addr, "tcp4:"):
+		network = "udp4"
+	case strings.HasPrefix(addr, "tcp6:"):
+		network = "udp6"
+	}
+	host := strings.TrimPrefix(strings.TrimPrefix(addr, "tcp4:"), "tcp6:")
+	host, _, err := net.SplitHostPort(host)
+	if err != nil {
+		return "", "", 0, false
+	}
+	return network, net.JoinHostPort(host, strconv.Itoa(tcp.Port)), tcp.Port, true
 }
 
 // listen opens one BIGA_LISTEN address: "host:port", "[ipv6]:port",
@@ -270,10 +347,55 @@ func listen(ctx context.Context, addr string) (net.Listener, error) {
 	return ln, nil
 }
 
+func openStore(ctx context.Context, cfg config.Config, log *slog.Logger, timeout time.Duration) (*store.Store, error) {
+	var opts []store.Option
+	if cfg.S3.Enabled() {
+		objects, err := objstore.NewS3(objstore.S3Config{
+			Endpoint: cfg.S3.Endpoint, Bucket: cfg.S3.Bucket, Region: cfg.S3.Region,
+			AccessKey: cfg.S3.AccessKey, SecretKey: cfg.S3.SecretKey, Insecure: cfg.S3.Insecure,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if cfg.S3.CreateBucket {
+			bucketCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			if err := objects.EnsureBucket(bucketCtx); err != nil {
+				return nil, fmt.Errorf("create bucket %q: %w", cfg.S3.Bucket, err)
+			}
+		}
+		opts = append(opts, store.WithObjects(objects))
+	}
+	openCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return store.Open(openCtx, cfg.DatabaseURL, log, opts...)
+}
+
+func blobs(ctx context.Context, cfg config.Config, log *slog.Logger, args []string, stdout io.Writer) error {
+	if len(args) != 1 || args[0] != "migrate" {
+		return errors.New("usage: biga-server blobs migrate")
+	}
+	if !cfg.S3.Enabled() {
+		return errors.New("set BIGA_S3_BUCKET and BIGA_S3_ENDPOINT first")
+	}
+	st, err := openStore(ctx, cfg, log, 30*time.Second)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	if err := st.PingObjects(ctx); err != nil {
+		return fmt.Errorf("object storage: %w", err)
+	}
+	moved, err := st.MigrateBlobs(ctx, 200, func(n int64) { log.Info("moving blobs", "moved", n) })
+	if err != nil {
+		return fmt.Errorf("moved %d before stopping: %w", moved, err)
+	}
+	_, err = fmt.Fprintf(stdout, "moved %d blobs to object storage\n", moved)
+	return err
+}
+
 func cleanup(ctx context.Context, cfg config.Config, log *slog.Logger, stdout io.Writer) error {
-	openCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	st, err := store.Open(openCtx, cfg.DatabaseURL, log)
-	cancel()
+	st, err := openStore(ctx, cfg, log, 30*time.Second)
 	if err != nil {
 		return err
 	}

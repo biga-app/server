@@ -66,6 +66,8 @@ The server applies its database migrations on start, answers `GET /healthz` (pro
 | `BIGA_CORS_ORIGINS` | Origins allowed to read the API from a browser |
 | `BIGA_RETENTION_DAYS` | Days an ended session is kept. Default `30`. |
 | `REDIS_URL` | Shares live events and rate limits across instances. Unset runs single-instance. |
+| `BIGA_TLS_CERT_FILE`, `BIGA_TLS_KEY_FILE` | Terminate TLS in the server. It then also serves HTTP/3 on the same port over UDP; `BIGA_HTTP3=off` disables that. Without TLS the server speaks HTTP/1.1 and cleartext HTTP/2 (h2c). |
+| `BIGA_S3_ENDPOINT`, `BIGA_S3_BUCKET` | Keep file content in an S3-compatible bucket instead of PostgreSQL. Also `BIGA_S3_REGION`, `BIGA_S3_ACCESS_KEY`, `BIGA_S3_SECRET_KEY`, `BIGA_S3_INSECURE` and `BIGA_S3_CREATE_BUCKET`. `biga-server blobs migrate` moves content already in PostgreSQL. |
 
 Secrets can also be read from a file by appending `_FILE` to the name, which is how Docker and Kubernetes secrets are mounted. Every setting, including limits and TLS, is listed in [configuration](https://biga.n10nce.dev/docs/configuration).
 
