@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/wire"
 )
 
 func TestExtensionCheckpointFeed(t *testing.T) {

@@ -21,14 +21,14 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/biga-sh/server/internal/auth"
-	"github.com/biga-sh/server/internal/config"
-	"github.com/biga-sh/server/internal/events"
-	"github.com/biga-sh/server/internal/httpapi"
-	"github.com/biga-sh/server/internal/ratelimit"
-	"github.com/biga-sh/server/internal/service"
-	"github.com/biga-sh/server/internal/store"
-	"github.com/biga-sh/server/internal/version"
+	"github.com/biga-app/server/internal/auth"
+	"github.com/biga-app/server/internal/config"
+	"github.com/biga-app/server/internal/events"
+	"github.com/biga-app/server/internal/httpapi"
+	"github.com/biga-app/server/internal/ratelimit"
+	"github.com/biga-app/server/internal/service"
+	"github.com/biga-app/server/internal/store"
+	"github.com/biga-app/server/internal/version"
 )
 
 const usage = `biga-server runs the biga session server.

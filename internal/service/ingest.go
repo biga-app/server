@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/biga-sh/server/internal/linediff"
-	"github.com/biga-sh/server/internal/store"
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/linediff"
+	"github.com/biga-app/server/internal/store"
+	"github.com/biga-app/server/internal/wire"
 )
 
 // IngestSnapshot replaces a session's tree with an uploaded snapshot and

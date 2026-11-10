@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/biga-sh/server/internal/service"
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/service"
+	"github.com/biga-app/server/internal/wire"
 )
 
 func (a *API) markCheckpoint(w http.ResponseWriter, r *http.Request) {

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/biga-sh/server/internal/service"
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/service"
+	"github.com/biga-app/server/internal/wire"
 )
 
 // serviceError answers a failed service call. inactiveCode is the error

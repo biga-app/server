@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report vulnerabilities privately through
-[GitHub security advisories](https://github.com/biga-sh/server/security/advisories/new),
+[GitHub security advisories](https://github.com/biga-app/server/security/advisories/new),
 not in a public issue. You will get an answer within a few days.
 
 ## Threat model

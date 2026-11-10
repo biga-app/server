@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/wire"
 )
 
 // CheckpointRow is one checkpoint without its changes.

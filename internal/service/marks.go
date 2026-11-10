@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/biga-sh/server/internal/store"
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/store"
+	"github.com/biga-app/server/internal/wire"
 )
 
 var ErrMarkKeyConflict = errors.New("checkpoint mark already exists with a different name")

@@ -6,9 +6,9 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/biga-sh/server/internal/auth"
-	"github.com/biga-sh/server/internal/store"
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/auth"
+	"github.com/biga-app/server/internal/store"
+	"github.com/biga-app/server/internal/wire"
 )
 
 var (

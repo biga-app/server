@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/biga-sh/server/internal/store"
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/store"
+	"github.com/biga-app/server/internal/wire"
 )
 
 // Page sizes for history listings.

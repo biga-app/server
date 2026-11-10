@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/biga-sh/server/internal/auth"
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/auth"
+	"github.com/biga-app/server/internal/wire"
 )
 
 // sessionID reads and validates the {id} path segment.

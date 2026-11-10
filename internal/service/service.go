@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/biga-sh/server/internal/auth"
-	"github.com/biga-sh/server/internal/events"
-	"github.com/biga-sh/server/internal/store"
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/auth"
+	"github.com/biga-app/server/internal/events"
+	"github.com/biga-app/server/internal/store"
+	"github.com/biga-app/server/internal/wire"
 )
 
 // Errors the HTTP layer maps to responses.

@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/biga-sh/server/internal/auth"
-	"github.com/biga-sh/server/internal/events"
-	"github.com/biga-sh/server/internal/store"
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/auth"
+	"github.com/biga-app/server/internal/events"
+	"github.com/biga-app/server/internal/store"
+	"github.com/biga-app/server/internal/wire"
 )
 
 // Session returns the public view of a session.

@@ -25,12 +25,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/biga-sh/server/internal/config"
-	"github.com/biga-sh/server/internal/events"
-	"github.com/biga-sh/server/internal/ratelimit"
-	"github.com/biga-sh/server/internal/service"
-	"github.com/biga-sh/server/internal/store"
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/config"
+	"github.com/biga-app/server/internal/events"
+	"github.com/biga-app/server/internal/ratelimit"
+	"github.com/biga-app/server/internal/service"
+	"github.com/biga-app/server/internal/store"
+	"github.com/biga-app/server/internal/wire"
 )
 
 var (

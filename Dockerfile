@@ -17,7 +17,7 @@ ARG VERSION=
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     ldflags="-s -w"; \
-    if [ -n "$VERSION" ]; then ldflags="$ldflags -X github.com/biga-sh/server/internal/version.version=$VERSION"; fi; \
+    if [ -n "$VERSION" ]; then ldflags="$ldflags -X github.com/biga-app/server/internal/version.version=$VERSION"; fi; \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "$ldflags" -o /out/biga-server ./cmd/biga-server
 

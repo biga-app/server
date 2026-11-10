@@ -1,7 +1,7 @@
 # The version lives in internal/version; `make build VERSION=1.2.3` sets it.
 LDFLAGS := -s -w
 ifdef VERSION
-LDFLAGS += -X github.com/biga-sh/server/internal/version.version=$(VERSION)
+LDFLAGS += -X github.com/biga-app/server/internal/version.version=$(VERSION)
 endif
 
 # A scratch Postgres for `make test-db`; see `make db`.

@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/biga-sh/server/internal/auth"
-	"github.com/biga-sh/server/internal/service"
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/auth"
+	"github.com/biga-app/server/internal/service"
+	"github.com/biga-app/server/internal/wire"
 )
 
 func (a *API) createExtension(w http.ResponseWriter, r *http.Request) {

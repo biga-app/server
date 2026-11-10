@@ -12,11 +12,11 @@ import (
 	"slices"
 	"time"
 
-	"github.com/biga-sh/server/internal/auth"
-	"github.com/biga-sh/server/internal/config"
-	"github.com/biga-sh/server/internal/events"
-	"github.com/biga-sh/server/internal/ratelimit"
-	"github.com/biga-sh/server/internal/service"
+	"github.com/biga-app/server/internal/auth"
+	"github.com/biga-app/server/internal/config"
+	"github.com/biga-app/server/internal/events"
+	"github.com/biga-app/server/internal/ratelimit"
+	"github.com/biga-app/server/internal/service"
 )
 
 // Options configures the API.

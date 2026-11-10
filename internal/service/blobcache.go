@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/biga-sh/server/internal/store"
+	"github.com/biga-app/server/internal/store"
 )
 
 // blobCache is a byte-bounded LRU of file contents. Blobs are immutable

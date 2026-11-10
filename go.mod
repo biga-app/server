@@ -1,4 +1,4 @@
-module github.com/biga-sh/server
+module github.com/biga-app/server
 
 go 1.26.0
 

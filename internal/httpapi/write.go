@@ -3,8 +3,8 @@ package httpapi
 import (
 	"net/http"
 
-	"github.com/biga-sh/server/internal/auth"
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/auth"
+	"github.com/biga-app/server/internal/wire"
 )
 
 // writeGate runs the checks every write shares, in order of cost: a

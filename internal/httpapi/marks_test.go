@@ -3,7 +3,7 @@ package httpapi
 import (
 	"testing"
 
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/wire"
 )
 
 func TestMarkCheckpointRetriesAndAppearsInFeed(t *testing.T) {

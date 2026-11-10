@@ -57,4 +57,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/biga-sh/server
+        - github.com/biga-app/server

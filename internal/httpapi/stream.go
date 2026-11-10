@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/biga-sh/server/internal/wire"
+	"github.com/biga-app/server/internal/wire"
 )
 
 // Live-stream timing.
