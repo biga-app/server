@@ -4,6 +4,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -30,6 +31,14 @@ var (
 	ErrQuota  = errors.New("session storage quota exceeded")
 )
 
+// MissingBlobsError means a snapshot refers to file content that was never
+// uploaded.
+type MissingBlobsError struct{ Hashes []string }
+
+func (e *MissingBlobsError) Error() string {
+	return fmt.Sprintf("%d files in the snapshot have no uploaded content", len(e.Hashes))
+}
+
 // Options tunes the service.
 type Options struct {
 	// SessionStale is how long an active session may go silent before
@@ -49,6 +58,8 @@ type Options struct {
 	Protected    []string
 	// BlobCacheBytes bounds the in-process content cache.
 	BlobCacheBytes int64
+	// Limits is reported to clients that create a session.
+	Limits wire.Limits
 }
 
 // Service implements session operations on top of the store and the event

@@ -24,9 +24,12 @@ func TestFramesCarryTheirEvent(t *testing.T) {
 	t.Parallel()
 	now := time.UnixMilli(1_700_000_000_123)
 
-	e, err := Connected("s1", now)
-	if err != nil || e.Name != NameConnected || decode(t, e).GetConnected().GetTimestamp() != now.UnixMilli() {
+	e, err := Connected("s1", now, true)
+	if got := decode(t, e).GetConnected(); err != nil || e.Name != NameConnected || got.GetTimestamp() != now.UnixMilli() || !got.GetReplayed() {
 		t.Errorf("connected = %+v, %v", e, err)
+	}
+	if e, _ = Connected("s1", now, false); decode(t, e).GetConnected().GetReplayed() {
+		t.Error("a stream that is not resuming must not say it replayed")
 	}
 	e, err = SessionEnded("s1", now)
 	if err != nil || e.Name != NameSessionEnded || decode(t, e).GetSessionEnded().GetSessionId() != "s1" {
@@ -42,7 +45,7 @@ func TestFramesCarryTheirEvent(t *testing.T) {
 		Changes:           []wire.CheckpointChange{{Path: "a.txt", ChangeType: wire.Modified}},
 	}
 	e, err = Checkpoint(cp)
-	if got := decode(t, e).GetCheckpoint(); err != nil || e.Name != NameCheckpoint || got.GetSummary().GetSeq() != 3 || got.GetChanges()[0].GetPath() != "a.txt" {
+	if got := decode(t, e).GetCheckpoint(); err != nil || e.Name != NameCheckpoint || e.Seq != 3 || got.GetSummary().GetSeq() != 3 || got.GetChanges()[0].GetPath() != "a.txt" {
 		t.Errorf("checkpoint = %+v, %v", e, err)
 	}
 
@@ -54,7 +57,7 @@ func TestFramesCarryTheirEvent(t *testing.T) {
 
 func TestFramesAreSelfDelimiting(t *testing.T) {
 	t.Parallel()
-	a, _ := Connected("s1", time.Now())
+	a, _ := Connected("s1", time.Now(), false)
 	b, _ := Keepalive(time.Now())
 	in := bytes.NewReader(append(append([]byte{}, a.Data...), b.Data...))
 

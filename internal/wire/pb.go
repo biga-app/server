@@ -69,7 +69,14 @@ func SessionToPB(s Session) *bigav1.Session {
 }
 
 func GrantToPB(g SessionGrant) *bigav1.SessionGrant {
-	return &bigav1.SessionGrant{Session: SessionToPB(g.Session), Token: g.Token, ShareUrl: g.ShareURL}
+	return &bigav1.SessionGrant{
+		Session: SessionToPB(g.Session), Token: g.Token, ShareUrl: g.ShareURL,
+		Limits: &bigav1.Limits{
+			MaxSnapshotFiles:  int32(g.Limits.MaxSnapshotFiles),
+			MaxFileBytes:      g.Limits.MaxFileBytes,
+			MaxBlobBatchBytes: g.Limits.MaxBlobBatchBytes,
+		},
+	}
 }
 
 func SessionInputFromPB(r *bigav1.PutSessionRequest) CreateSessionInput {
@@ -160,6 +167,14 @@ func CheckpointUploadFromPB(u *bigav1.CheckpointUpload) CheckpointUpload {
 			Path: e.GetPath(), ChangeType: changeFromPB(e.GetChangeType()), OldPath: e.GetOldPath(),
 			Hash: e.Hash, Size: e.GetSize(), Binary: e.GetBinary(), Content: string(e.GetContent()),
 		})
+	}
+	return out
+}
+
+func BlobsFromPB(r *bigav1.UploadBlobsRequest) []File {
+	out := make([]File, len(r.GetBlobs()))
+	for i, b := range r.GetBlobs() {
+		out[i] = File{Hash: b.GetHash(), Content: string(b.GetContent())}
 	}
 	return out
 }

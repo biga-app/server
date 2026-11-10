@@ -29,6 +29,7 @@ import (
 	"github.com/biga-app/server/internal/service"
 	"github.com/biga-app/server/internal/store"
 	"github.com/biga-app/server/internal/version"
+	"github.com/biga-app/server/internal/wire"
 )
 
 const usage = `biga-server runs the biga session server.
@@ -135,11 +136,16 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 
 	hub := events.NewHub(bridge, log)
 	svc := service.New(st, hub, service.Options{
-		SessionStale:   cfg.SessionStale,
-		EagerMaxBytes:  cfg.EagerMaxBytes,
-		EagerMaxFiles:  cfg.EagerMaxFiles,
-		StorageQuota:   cfg.Limits.SessionStorageBytes,
-		PublicURL:      cfg.PublicURL,
+		SessionStale:  cfg.SessionStale,
+		EagerMaxBytes: cfg.EagerMaxBytes,
+		EagerMaxFiles: cfg.EagerMaxFiles,
+		StorageQuota:  cfg.Limits.SessionStorageBytes,
+		PublicURL:     cfg.PublicURL,
+		Limits: wire.Limits{
+			MaxSnapshotFiles:  cfg.Limits.SnapshotFiles,
+			MaxFileBytes:      cfg.Limits.FileBytes,
+			MaxBlobBatchBytes: cfg.Limits.CheckpointBytes,
+		},
 		Retention:      cfg.Retention,
 		AbandonAfter:   cfg.AbandonAfter,
 		Protected:      cfg.ProtectedSessions,

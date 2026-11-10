@@ -60,6 +60,7 @@ var (
 	limitSnapshot   = rateLimit{15, time.Minute}
 	limitCheckpoint = rateLimit{240, time.Minute}
 	limitHeartbeat  = rateLimit{30, time.Minute}
+	limitBlobs      = rateLimit{600, time.Minute}
 	limitOwnerRead  = rateLimit{30, time.Minute}
 	// limitAuthFailures caps wrong tokens and keys per client.
 	limitAuthFailures = rateLimit{30, 10 * time.Minute}
@@ -121,6 +122,8 @@ func (a *API) routes() {
 	m.HandleFunc("DELETE /api/sessions/{id}", write(readTimeout, a.endSession))
 	m.HandleFunc("POST /api/sessions/{id}/snapshot", write(uploadTimeout, a.snapshot))
 	m.HandleFunc("PUT /api/sessions/{id}/checkpoints/marks/{key}", write(readTimeout, a.markCheckpoint))
+	m.HandleFunc("POST /api/sessions/{id}/blobs/missing", write(readTimeout, a.missingBlobs))
+	m.HandleFunc("POST /api/sessions/{id}/blobs", write(uploadTimeout, a.uploadBlobs))
 	m.HandleFunc("POST /api/sessions/{id}/checkpoint", write(uploadTimeout, a.checkpoint))
 	m.HandleFunc("POST /api/sessions/{id}/heartbeat", write(readTimeout, a.heartbeat))
 	m.HandleFunc("GET /api/sessions/{id}/manifest", write(readTimeout, a.manifest))

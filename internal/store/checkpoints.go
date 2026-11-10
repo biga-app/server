@@ -97,6 +97,66 @@ func (q *Queries) Checkpoints(ctx context.Context, sessionID string, limit int, 
 	return out, rows.Err()
 }
 
+// ReplayedCheckpoint is a checkpoint together with its changes.
+type ReplayedCheckpoint struct {
+	Row     CheckpointRow
+	Changes []wire.CheckpointChange
+}
+
+// CheckpointsAfter returns up to limit checkpoints with a sequence number above
+// after, oldest first, each with its changes in upload order.
+func (q *Queries) CheckpointsAfter(ctx context.Context, sessionID string, after, limit int) ([]ReplayedCheckpoint, error) {
+	rows, err := q.db.Query(ctx, `
+		SELECT seq, label, additions, deletions, files_changed, created_at, marker_key IS NOT NULL
+		FROM checkpoints
+		WHERE session_id = $1 AND seq > $2
+		ORDER BY seq
+		LIMIT $3`, sessionID, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ReplayedCheckpoint
+	for rows.Next() {
+		var c CheckpointRow
+		if err := rows.Scan(&c.Seq, &c.Label, &c.Additions, &c.Deletions, &c.FilesChanged, &c.CreatedAt, &c.Named); err != nil {
+			return nil, err
+		}
+		out = append(out, ReplayedCheckpoint{Row: c, Changes: []wire.CheckpointChange{}})
+	}
+	if err := rows.Err(); err != nil || len(out) == 0 {
+		return out, err
+	}
+
+	bySeq := make(map[int]*ReplayedCheckpoint, len(out))
+	for i := range out {
+		bySeq[out[i].Row.Seq] = &out[i]
+	}
+	changes, err := q.db.Query(ctx, `
+		SELECT checkpoint_seq, path, change_type, coalesce(old_path, ''), before_hash, after_hash, additions, deletions, "binary"
+		FROM checkpoint_changes
+		WHERE session_id = $1 AND checkpoint_seq > $2 AND checkpoint_seq <= $3
+		ORDER BY checkpoint_seq, id`, sessionID, after, out[len(out)-1].Row.Seq)
+	if err != nil {
+		return nil, err
+	}
+	defer changes.Close()
+	for changes.Next() {
+		var (
+			seq int
+			ch  wire.CheckpointChange
+		)
+		if err := changes.Scan(&seq, &ch.Path, &ch.ChangeType, &ch.OldPath, &ch.BeforeHash, &ch.AfterHash,
+			&ch.Additions, &ch.Deletions, &ch.Binary); err != nil {
+			return nil, err
+		}
+		if c := bySeq[seq]; c != nil {
+			c.Changes = append(c.Changes, ch)
+		}
+	}
+	return out, changes.Err()
+}
+
 // Checkpoint returns one checkpoint and its changes in upload order.
 func (q *Queries) Checkpoint(ctx context.Context, sessionID string, seq int) (CheckpointRow, []wire.CheckpointChange, error) {
 	c := CheckpointRow{Seq: seq}

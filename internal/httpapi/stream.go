@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"math"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -52,7 +54,21 @@ func (g *streamGate) release(client string) {
 	}
 }
 
+// resumePosition reads where a reconnecting viewer left off: the last
+// checkpoint it applied and the timestamp of the snapshot it holds.
+func resumePosition(r *http.Request) (after int, snapshot int64, ok bool) {
+	q := r.URL.Query()
+	after, errAfter := strconv.Atoi(q.Get("after"))
+	snapshot, errSnapshot := strconv.ParseInt(q.Get("snapshot"), 10, 64)
+	if errAfter != nil || errSnapshot != nil || after < -1 || after > math.MaxInt32 || snapshot <= 0 {
+		return 0, 0, false
+	}
+	return after, snapshot, true
+}
+
 // stream sends a session's live events as length-delimited protobuf frames.
+// A viewer that says where it left off (?after=&snapshot=) is sent the
+// checkpoints it missed when that is cheap, and told to reload otherwise.
 func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 	id, ok := sessionID(w, r)
 	if !ok {
@@ -103,8 +119,29 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 		return err == nil && send(e.Data)
 	}
 
-	if !frame(events.Connected(id, time.Now())) || sess.Status != wire.StatusActive {
+	var (
+		missed  []*wire.Checkpoint
+		resumed bool
+		lastSeq = -1
+	)
+	if after, snapshot, ok := resumePosition(r); ok && sess.Status == wire.StatusActive {
+		var err error
+		if missed, resumed, err = a.svc.Replay(r.Context(), id, after, snapshot); err != nil {
+			a.log.Warn("stream replay failed", "session", id, "error", err)
+			missed, resumed = nil, false
+		}
+		if resumed {
+			lastSeq = after
+		}
+	}
+	if !frame(events.Connected(id, time.Now(), resumed)) || sess.Status != wire.StatusActive {
 		return
+	}
+	for _, cp := range missed {
+		if !frame(events.Checkpoint(cp)) {
+			return
+		}
+		lastSeq = cp.Seq
 	}
 
 	tick := time.NewTicker(keepaliveEvery)
@@ -118,6 +155,9 @@ func (a *API) stream(w http.ResponseWriter, r *http.Request) {
 		case e, ok := <-sub.C:
 			if !ok {
 				return // fell too far behind; the browser reconnects and resyncs
+			}
+			if e.Name == events.NameCheckpoint && e.Seq <= lastSeq {
+				continue // already sent as part of the replay
 			}
 			if !send(e.Data) || e.Name == events.NameSessionEnded {
 				return

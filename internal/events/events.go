@@ -19,6 +19,8 @@ import (
 type Event struct {
 	Name string
 	Data []byte
+	// Seq is the checkpoint number of a "checkpoint" frame.
+	Seq int
 }
 
 // bufferSize is how many events a viewer may fall behind before it is
@@ -106,7 +108,7 @@ func (h *Hub) Publish(ctx context.Context, sessionID string, e Event) {
 	if h.bridge == nil {
 		return
 	}
-	msg, err := proto.Marshal(&bigav1.BridgeMessage{InstanceId: h.instance, SessionId: sessionID, Name: e.Name, Frame: e.Data})
+	msg, err := proto.Marshal(&bigav1.BridgeMessage{InstanceId: h.instance, SessionId: sessionID, Name: e.Name, Frame: e.Data, Seq: int32(e.Seq)})
 	if err != nil {
 		h.log.Error("encode bridged event", "error", err)
 		return
@@ -155,6 +157,6 @@ func (h *Hub) Run(ctx context.Context) {
 		if msg.GetInstanceId() == h.instance {
 			return // already delivered locally
 		}
-		h.deliver(msg.GetSessionId(), Event{Name: msg.GetName(), Data: msg.GetFrame()})
+		h.deliver(msg.GetSessionId(), Event{Name: msg.GetName(), Data: msg.GetFrame(), Seq: int(msg.GetSeq())})
 	})
 }

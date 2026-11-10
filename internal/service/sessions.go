@@ -72,7 +72,7 @@ func (s *Service) PutSession(ctx context.Context, id, token string, in wire.Crea
 	if err != nil {
 		return wire.SessionGrant{}, false, err
 	}
-	grant.ShareURL = s.shareURL(id)
+	grant.ShareURL, grant.Limits = s.shareURL(id), s.opts.Limits
 	return grant, created, nil
 }
 

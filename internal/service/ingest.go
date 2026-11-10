@@ -39,6 +39,9 @@ func (s *Service) IngestSnapshot(ctx context.Context, id, token string, snap *wi
 		if err != nil {
 			return err
 		}
+		if err := requireBlobs(ctx, q, id, files); err != nil {
+			return err
+		}
 		if err := s.storeBlobs(ctx, q, id, blobs); err != nil {
 			return err
 		}
@@ -54,7 +57,7 @@ func (s *Service) IngestSnapshot(ctx context.Context, id, token string, snap *wi
 		var needed []string
 		for _, f := range files {
 			incoming[f.Path] = true
-			if p, ok := priorByPath[f.Path]; ok && p.Hash != f.Hash && !f.Binary && !p.Binary {
+			if p, ok := priorByPath[f.Path]; ok && p.Hash != f.Hash && !f.Binary && !p.Binary && !f.Deferred {
 				needed = append(needed, p.Hash)
 			}
 		}
@@ -64,6 +67,10 @@ func (s *Service) IngestSnapshot(ctx context.Context, id, token string, snap *wi
 			}
 		}
 		priorBlobs, err := s.readBlobs(ctx, q, sess, needed)
+		if err != nil {
+			return err
+		}
+		counts, err := s.deferredCounts(ctx, q, sess, files, priorByPath)
 		if err != nil {
 			return err
 		}
@@ -78,9 +85,13 @@ func (s *Service) IngestSnapshot(ctx context.Context, id, token string, snap *wi
 			switch {
 			case existed:
 				ch.ChangeType, ch.BeforeHash = wire.Modified, new(p.Hash)
-				if !f.Binary && !p.Binary {
+				if f.Deferred {
+					ch.Additions, ch.Deletions = counts[f.Path].added, counts[f.Path].removed
+				} else if !f.Binary && !p.Binary {
 					ch.Additions, ch.Deletions = linediff.Count(priorBlobs[p.Hash].Content, f.Content)
 				}
+			case f.Deferred:
+				ch.Additions = counts[f.Path].added
 			case !f.Binary:
 				ch.Additions = linediff.Lines(f.Content)
 			}
@@ -263,7 +274,7 @@ func encodeFiles(files []wire.File) []store.EncodedBlob {
 	seen := make(map[string]bool, len(files))
 	in := make([]store.BlobInput, 0, len(files))
 	for _, f := range files {
-		if seen[f.Hash] {
+		if seen[f.Hash] || f.Deferred {
 			continue
 		}
 		seen[f.Hash] = true

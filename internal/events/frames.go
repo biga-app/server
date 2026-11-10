@@ -26,9 +26,9 @@ func frame(name string, ev *bigav1.StreamEvent) (Event, error) {
 	return Event{Name: name, Data: buf.Bytes()}, nil
 }
 
-func Connected(sessionID string, at time.Time) (Event, error) {
+func Connected(sessionID string, at time.Time, replayed bool) (Event, error) {
 	return frame(NameConnected, &bigav1.StreamEvent{Event: &bigav1.StreamEvent_Connected{
-		Connected: &bigav1.Connected{SessionId: sessionID, Timestamp: at.UnixMilli()},
+		Connected: &bigav1.Connected{SessionId: sessionID, Timestamp: at.UnixMilli(), Replayed: replayed},
 	}})
 }
 
@@ -41,9 +41,11 @@ func Snapshot(s wire.FileSnapshot) (Event, error) {
 }
 
 func Checkpoint(c *wire.Checkpoint) (Event, error) {
-	return frame(NameCheckpoint, &bigav1.StreamEvent{Event: &bigav1.StreamEvent_Checkpoint{
+	e, err := frame(NameCheckpoint, &bigav1.StreamEvent{Event: &bigav1.StreamEvent_Checkpoint{
 		Checkpoint: wire.CheckpointToPB(c),
 	}})
+	e.Seq = c.Seq
+	return e, err
 }
 
 func SessionEnded(sessionID string, at time.Time) (Event, error) {

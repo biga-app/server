@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -21,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -79,6 +81,11 @@ func newHarness(t *testing.T, env map[string]string) *harness {
 		StorageQuota:   cfg.Limits.SessionStorageBytes,
 		PublicURL:      cfg.PublicURL,
 		BlobCacheBytes: cfg.BlobCacheBytes,
+		Limits: wire.Limits{
+			MaxSnapshotFiles:  cfg.Limits.SnapshotFiles,
+			MaxFileBytes:      cfg.Limits.FileBytes,
+			MaxBlobBatchBytes: cfg.Limits.CheckpointBytes,
+		},
 	}, quiet)
 	done := make(chan struct{})
 	api := New(Options{Service: svc, Events: hub, Config: cfg, Limiter: ratelimit.NewMemory(), Log: quiet, Done: done, Ready: st.Ping})
@@ -565,27 +572,23 @@ func TestCORSIsReadOnly(t *testing.T) {
 	}
 }
 
-func TestStreamDeliversLiveEvents(t *testing.T) {
-	t.Parallel()
-	h := newHarness(t, nil)
-	id := newSessionID(t)
-	token := h.create(id)
-	base := "/api/sessions/" + id
-	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("a.txt", "1\n"))}, 202, "")
-
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	r, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.srv.URL+base+"/stream", nil)
+// watch opens a session's live stream and returns a function that reads its
+// next frame.
+func (h *harness) watch(path string) func() *bigav1.StreamEvent {
+	h.t.Helper()
+	ctx, cancel := context.WithTimeout(h.t.Context(), 10*time.Second)
+	h.t.Cleanup(cancel)
+	r, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.srv.URL+path, nil)
 	r.Header.Set("Accept", streamType)
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
-		t.Fatal(err)
+		h.t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	h.t.Cleanup(func() { resp.Body.Close() })
 	if ct := resp.Header.Get("Content-Type"); ct != streamType {
-		t.Fatalf("content type %q", ct)
+		h.t.Fatalf("content type %q", ct)
 	}
-	frames := make(chan *bigav1.StreamEvent, 16)
+	frames := make(chan *bigav1.StreamEvent, 128)
 	go func() {
 		defer close(frames)
 		in := bufio.NewReader(resp.Body)
@@ -597,21 +600,31 @@ func TestStreamDeliversLiveEvents(t *testing.T) {
 			frames <- &ev
 		}
 	}()
-	next := func() *bigav1.StreamEvent {
-		t.Helper()
+	return func() *bigav1.StreamEvent {
+		h.t.Helper()
 		select {
 		case ev, ok := <-frames:
 			if !ok {
-				t.Fatal("the stream closed early")
+				h.t.Fatal("the stream closed early")
 			}
 			return ev
 		case <-ctx.Done():
-			t.Fatal("timed out waiting for a frame")
+			h.t.Fatal("timed out waiting for a frame")
 		}
 		return nil
 	}
+}
 
-	if ev := next(); ev.GetConnected().GetSessionId() != id {
+func TestStreamDeliversLiveEvents(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	id := newSessionID(t)
+	token := h.create(id)
+	base := "/api/sessions/" + id
+	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("a.txt", "1\n"))}, 202, "")
+
+	next := h.watch(base + "/stream")
+	if ev := next(); ev.GetConnected().GetSessionId() != id || ev.GetConnected().GetReplayed() {
 		t.Fatalf("first frame = %+v", ev)
 	}
 	h.expect(req{method: "POST", path: base + "/checkpoint", token: token, body: checkpoint(id, entry("a.txt", "modified", "2\n"))}, 202, "")
@@ -623,8 +636,111 @@ func TestStreamDeliversLiveEvents(t *testing.T) {
 	if ev := next(); ev.GetSessionEnded().GetSessionId() != id {
 		t.Fatalf("last frame = %+v", ev)
 	}
-	if _, open := <-frames; open {
-		t.Error("the stream should close after session_ended")
+}
+
+// replaySession makes a session with checkpoints 0 to saves and returns its
+// owner token and the timestamp of its snapshot.
+func (h *harness) replaySession(id string, saves int) (token string, snapshotTS int64) {
+	h.t.Helper()
+	token = h.create(id)
+	base := "/api/sessions/" + id
+	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("a.txt", "0\n"))}, 202, "")
+	for i := 1; i <= saves; i++ {
+		h.expect(req{method: "POST", path: base + "/checkpoint", token: token, body: checkpoint(id, entry("a.txt", "modified", strings.Repeat("x", i)+"\n"))}, 202, "")
+	}
+	var st bigav1.SessionState
+	h.expect(req{method: "GET", path: base + "/state"}, 200, "").data(h.t, &st)
+	return token, st.GetSnapshot().GetTimestamp()
+}
+
+func TestStreamReplaysWhatTheViewerMissed(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	id := newSessionID(t)
+	token, ts := h.replaySession(id, 3)
+	base := "/api/sessions/" + id
+	resume := func(after int, snapshot int64) string {
+		return fmt.Sprintf("%s/stream?after=%d&snapshot=%d", base, after, snapshot)
+	}
+
+	next := h.watch(resume(0, ts))
+	if ev := next(); !ev.GetConnected().GetReplayed() {
+		t.Fatalf("a viewer one snapshot behind should be replayed to: %+v", ev)
+	}
+	for seq := int32(1); seq <= 3; seq++ {
+		cp := next().GetCheckpoint()
+		if cp.GetSummary().GetSeq() != seq || len(cp.GetChanges()) != 1 || cp.GetChanges()[0].GetBeforeHash() == "" {
+			t.Fatalf("replayed checkpoint %d = %+v", seq, cp)
+		}
+	}
+	h.expect(req{method: "POST", path: base + "/checkpoint", token: token, body: checkpoint(id, entry("a.txt", "modified", "live\n"))}, 202, "")
+	if cp := next().GetCheckpoint(); cp.GetSummary().GetSeq() != 4 {
+		t.Fatalf("the live checkpoint should follow the replay once, got %+v", cp)
+	}
+
+	caughtUp := h.watch(resume(4, ts))
+	if ev := caughtUp(); !ev.GetConnected().GetReplayed() {
+		t.Fatalf("a viewer that is up to date resumes with nothing to replay: %+v", ev)
+	}
+	h.expect(req{method: "POST", path: base + "/checkpoint", token: token, body: checkpoint(id, entry("a.txt", "modified", "again\n"))}, 202, "")
+	if cp := caughtUp().GetCheckpoint(); cp.GetSummary().GetSeq() != 5 {
+		t.Fatalf("checkpoint after resuming = %+v", cp)
+	}
+}
+
+func TestStreamAsksViewersToReloadWhenReplayIsNotSafe(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	id := newSessionID(t)
+	token, ts := h.replaySession(id, 2)
+	base := "/api/sessions/" + id
+
+	for name, path := range map[string]string{
+		"no position":              base + "/stream",
+		"unreadable position":      base + "/stream?after=x&snapshot=" + strconv.FormatInt(ts, 10),
+		"no snapshot":              fmt.Sprintf("%s/stream?after=1", base),
+		"a snapshot it never held": fmt.Sprintf("%s/stream?after=1&snapshot=%d", base, ts-1),
+	} {
+		if ev := h.watch(path)(); ev.GetConnected() == nil || ev.GetConnected().GetReplayed() {
+			t.Errorf("%s: connected = %+v, want not replayed", name, ev)
+		}
+	}
+
+	// A new snapshot replaces the tree, which a replay of checkpoints cannot express.
+	h.expect(req{method: "POST", path: base + "/snapshot", token: token, body: snapshot(id, file("a.txt", "0\n"), file("b.txt", "new\n"))}, 202, "")
+	if ev := h.watch(fmt.Sprintf("%s/stream?after=2&snapshot=%d", base, ts))(); ev.GetConnected().GetReplayed() {
+		t.Errorf("a viewer holding an older snapshot must reload: %+v", ev)
+	}
+}
+
+func TestStreamReplayIsBounded(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	id := newSessionID(t)
+	_, ts := h.replaySession(id, service.MaxReplay+2)
+	base := "/api/sessions/" + id
+
+	if ev := h.watch(fmt.Sprintf("%s/stream?after=0&snapshot=%d", base, ts))(); ev.GetConnected().GetReplayed() {
+		t.Errorf("a viewer %d checkpoints behind must reload: %+v", service.MaxReplay+2, ev)
+	}
+	next := h.watch(fmt.Sprintf("%s/stream?after=%d&snapshot=%d", base, service.MaxReplay+2-service.MaxReplay, ts))
+	if ev := next(); !ev.GetConnected().GetReplayed() {
+		t.Errorf("a viewer exactly at the limit can be replayed: %+v", ev)
+	}
+	for range service.MaxReplay {
+		next()
+	}
+}
+
+func TestStreamDoesNotReplayAnEndedSession(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	id := newSessionID(t)
+	token, ts := h.replaySession(id, 1)
+	base := "/api/sessions/" + id
+	h.expect(req{method: "DELETE", path: base, token: token}, 204, "")
+	if ev := h.watch(fmt.Sprintf("%s/stream?after=0&snapshot=%d", base, ts))(); ev.GetConnected().GetReplayed() {
+		t.Errorf("an ended session has nothing to resume: %+v", ev)
 	}
 }
 

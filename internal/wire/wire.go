@@ -54,6 +54,15 @@ type SessionGrant struct {
 	Session
 	Token    string `json:"token,omitempty"`
 	ShareURL string `json:"shareUrl,omitempty"`
+	Limits   Limits `json:"-"`
+}
+
+// Limits is what the server accepts, reported to the client that creates a
+// session.
+type Limits struct {
+	MaxSnapshotFiles  int
+	MaxFileBytes      int64
+	MaxBlobBatchBytes int64
 }
 
 // CreateSessionInput is the body of PUT /api/sessions/:id.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/biga-app/server/internal/service"
 	"github.com/biga-app/server/internal/wire"
@@ -13,8 +14,15 @@ import (
 // code for an ended session, which differs by endpoint for compatibility
 // with existing clients.
 func (a *API) serviceError(w http.ResponseWriter, r *http.Request, err error, inactiveCode, notFoundMsg string) {
-	var verr *wire.ValidationError
+	var (
+		verr    *wire.ValidationError
+		missing *service.MissingBlobsError
+	)
 	switch {
+	case errors.As(err, &missing):
+		fail(w, r, http.StatusConflict, "missing_blob",
+			"The snapshot refers to file content that was not uploaded. Upload it first, then send the snapshot again.",
+			map[string]string{"count": strconv.Itoa(len(missing.Hashes)), "first": missing.Hashes[0]})
 	case errors.As(err, &verr):
 		fail(w, r, http.StatusBadRequest, "invalid_request", "The request is invalid: "+verr.Error(),
 			map[string]string{"field": verr.Field, "reason": verr.Reason})

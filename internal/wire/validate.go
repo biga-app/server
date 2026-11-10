@@ -113,6 +113,47 @@ type File struct {
 	Binary bool
 	// Content is the file's text; empty for binary files.
 	Content string
+	// Deferred marks a text file whose content was left out of a snapshot
+	// because it was uploaded ahead of it as a blob.
+	Deferred bool
+}
+
+// ValidateBlobs checks content uploaded ahead of a snapshot: every hash must
+// be the SHA-256 of its content, and none may repeat.
+func ValidateBlobs(blobs []File, maxBlobs int, maxFileBytes int64) error {
+	if len(blobs) == 0 {
+		return invalid("blobs", "must not be empty")
+	}
+	if len(blobs) > maxBlobs {
+		return invalid("blobs", "has more than %d blobs; send fewer at a time", maxBlobs)
+	}
+	seen := make(map[string]bool, len(blobs))
+	for i := range blobs {
+		b := &blobs[i]
+		f, err := checkFile("blobs", b.Hash, b.Hash, int64(len(b.Content)), false, b.Content, maxFileBytes)
+		if err != nil {
+			return err
+		}
+		if seen[f.Hash] {
+			return invalid("blobs", "hash %q appears twice", f.Hash)
+		}
+		seen[f.Hash] = true
+		b.Hash, b.Size = f.Hash, f.Size
+	}
+	return nil
+}
+
+// ValidateHashes checks a list of content hashes a client asks about.
+func ValidateHashes(hashes []string, max int) error {
+	if len(hashes) > max {
+		return invalid("hashes", "has more than %d hashes; ask about fewer at a time", max)
+	}
+	for _, h := range hashes {
+		if !ValidHash(h) {
+			return invalid("hashes", "%q is not a SHA-256 hash", h)
+		}
+	}
+	return nil
 }
 
 // TreeLimits bounds a snapshot tree.
@@ -198,7 +239,7 @@ func (w *treeWalker) walk(n *FileNode, parent string, depth int) error {
 		return nil
 	case NodeFile:
 		n.Children, n.Ignored = nil, false
-		f, err := checkFile("tree", n.Path, n.Hash, n.Size, n.Binary, n.Content, w.lim.MaxFileBytes)
+		f, err := checkSnapshotFile(n, w.lim.MaxFileBytes)
 		if err != nil {
 			return err
 		}
@@ -227,6 +268,22 @@ func validName(name string) error {
 		return errors.New("contains a slash")
 	}
 	return nil
+}
+
+// checkSnapshotFile validates a snapshot's file. A text file that carries no
+// content is taken to have been uploaded as a blob already: only its hash is
+// checked here, and the ingest checks that the blob exists.
+func checkSnapshotFile(n *FileNode, maxBytes int64) (File, error) {
+	if n.Binary || n.Content != "" || n.Hash == HashOf("") {
+		return checkFile("tree", n.Path, n.Hash, n.Size, n.Binary, n.Content, maxBytes)
+	}
+	if !ValidHash(n.Hash) {
+		return File{}, invalid("tree", "file %q: hash must be 64 hex digits", n.Path)
+	}
+	if n.Size < 0 {
+		return File{}, invalid("tree", "file %q: size is negative", n.Path)
+	}
+	return File{Path: n.Path, Hash: strings.ToLower(n.Hash), Size: min(n.Size, maxStoredValue), Deferred: true}, nil
 }
 
 // checkFile validates one file's identity and content. A text file's hash

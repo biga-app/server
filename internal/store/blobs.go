@@ -153,3 +153,24 @@ func (q *Queries) HeadContents(ctx context.Context, sessionID string) (map[strin
 	}
 	return out, rows.Err()
 }
+
+// ExistingBlobs reports which of the hashes the session already has a blob for.
+func (q *Queries) ExistingBlobs(ctx context.Context, sessionID string, hashes []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(hashes))
+	if len(hashes) == 0 {
+		return out, nil
+	}
+	rows, err := q.db.Query(ctx, `SELECT hash FROM blobs WHERE session_id = $1 AND hash = ANY($2)`, sessionID, hashes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return nil, err
+		}
+		out[hash] = true
+	}
+	return out, rows.Err()
+}
